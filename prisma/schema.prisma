@@ -1,0 +1,402 @@
+// PaperCraft AI - Complete Prisma Schema
+// Database: PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────
+
+enum Role {
+  USER
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum PlanType {
+  FREE
+  PRO
+  INSTITUTION
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELLED
+  EXPIRED
+  TRIAL
+  PAST_DUE
+}
+
+enum PaperStatus {
+  DRAFT
+  PROCESSING
+  READY
+  ARCHIVED
+}
+
+enum ExportFormat {
+  PDF
+  DOCX
+}
+
+enum OcrJobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum QuestionType {
+  MCQ
+  SHORT_ANSWER
+  LONG_ANSWER
+  FILL_IN_BLANK
+  TRUE_FALSE
+  MATCH_FOLLOWING
+  DIAGRAM
+  NUMERICAL
+}
+
+enum DifficultyLevel {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum BloomLevel {
+  REMEMBER
+  UNDERSTAND
+  APPLY
+  ANALYZE
+  EVALUATE
+  CREATE
+}
+
+// ─────────────────────────────────────────
+// USER & AUTH
+// ─────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  passwordHash  String?
+  googleId      String?   @unique
+  avatarUrl     String?
+  role          Role      @default(USER)
+  emailVerified Boolean   @default(false)
+  isActive      Boolean   @default(true)
+  lastLoginAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  institution   Institution? @relation(fields: [institutionId], references: [id])
+  institutionId String?
+
+  subscription  Subscription?
+  papers        Paper[]
+  templates     Template[]
+  exports       Export[]
+  ocrJobs       OcrJob[]
+  usageLogs     UsageLog[]
+  payments      Payment[]
+  sessions      Session[]
+  passwordResets PasswordReset[]
+  aiChats       AiChat[]
+  teamMemberships TeamMember[]
+
+  @@map("users")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  ipAddress String?
+  userAgent String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model PasswordReset {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("password_resets")
+}
+
+// ─────────────────────────────────────────
+// INSTITUTION
+// ─────────────────────────────────────────
+
+model Institution {
+  id          String   @id @default(cuid())
+  name        String
+  address     String?
+  logoUrl     String?
+  website     String?
+  affiliation String?  // CBSE, ICSE, State Board, etc.
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users    User[]
+  members  TeamMember[]
+  papers   Paper[]
+
+  @@map("institutions")
+}
+
+model TeamMember {
+  id            String   @id @default(cuid())
+  userId        String
+  institutionId String
+  role          String   @default("MEMBER") // OWNER, ADMIN, MEMBER
+  joinedAt      DateTime @default(now())
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  institution Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, institutionId])
+  @@map("team_members")
+}
+
+// ─────────────────────────────────────────
+// SUBSCRIPTIONS & PAYMENTS
+// ─────────────────────────────────────────
+
+model Plan {
+  id                String   @id @default(cuid())
+  name              String
+  type              PlanType
+  priceMonthly      Int      // in paise (INR)
+  priceYearly       Int
+  papersPerMonth    Int      // -1 = unlimited
+  exportsPerMonth   Int
+  templatesCount    Int
+  hasDocxExport     Boolean  @default(false)
+  hasCustomBranding Boolean  @default(false)
+  hasApiAccess      Boolean  @default(false)
+  hasTeamAccess     Boolean  @default(false)
+  maxTeamMembers    Int      @default(1)
+  storageMb         Int      @default(100)
+  features          Json     // array of feature strings
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+
+  subscriptions Subscription[]
+  razorpayPlanId String?
+
+  @@map("plans")
+}
+
+model Subscription {
+  id                   String             @id @default(cuid())
+  userId               String             @unique
+  planId               String
+  status               SubscriptionStatus @default(TRIAL)
+  currentPeriodStart   DateTime
+  currentPeriodEnd     DateTime
+  cancelAtPeriodEnd    Boolean            @default(false)
+  razorpaySubId        String?            @unique
+  papersUsedThisMonth  Int                @default(0)
+  exportsUsedThisMonth Int                @default(0)
+  trialEndsAt          DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan Plan @relation(fields: [planId], references: [id])
+
+  @@map("subscriptions")
+}
+
+model Payment {
+  id              String   @id @default(cuid())
+  userId          String
+  amount          Int      // in paise
+  currency        String   @default("INR")
+  status          String   // success, failed, pending
+  razorpayOrderId String?
+  razorpayPayId   String?  @unique
+  razorpaySigId   String?
+  description     String?
+  invoiceUrl      String?
+  createdAt       DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("payments")
+}
+
+// ─────────────────────────────────────────
+// OCR & AI PROCESSING
+// ─────────────────────────────────────────
+
+model OcrJob {
+  id              String       @id @default(cuid())
+  userId          String
+  status          OcrJobStatus @default(PENDING)
+  inputType       String       // image, pdf, text
+  inputUrl        String?      // S3/Cloudinary URL
+  rawText         String?      @db.Text
+  cleanedText     String?      @db.Text
+  extractedData   Json?        // structured questions JSON
+  errorMessage    String?
+  processingMs    Int?
+  confidence      Float?       // OCR confidence 0-1
+  questionsFound  Int          @default(0)
+  sectionsFound   Int          @default(0)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  user  User   @relation(fields: [userId], references: [id])
+  paper Paper? @relation(fields: [paperId], references: [id])
+  paperId String?
+
+  @@map("ocr_jobs")
+}
+
+// ─────────────────────────────────────────
+// QUESTION PAPERS
+// ─────────────────────────────────────────
+
+model Paper {
+  id            String      @id @default(cuid())
+  userId        String
+  institutionId String?
+  title         String
+  status        PaperStatus @default(DRAFT)
+  templateId    String?
+  examDetails   Json        // ExamDetails object
+  sections      Json        // Section[] with questions
+  totalMarks    Int         @default(0)
+  questionCount Int         @default(0)
+  version       Int         @default(1)
+  isPublic      Boolean     @default(false)
+  tags          String[]
+  thumbnail     String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  user        User         @relation(fields: [userId], references: [id])
+  institution Institution? @relation(fields: [institutionId], references: [id])
+  template    Template?    @relation(fields: [templateId], references: [id])
+  exports     Export[]
+  ocrJobs     OcrJob[]
+  versions    PaperVersion[]
+
+  @@map("papers")
+}
+
+model PaperVersion {
+  id        String   @id @default(cuid())
+  paperId   String
+  version   Int
+  sections  Json     // snapshot of sections at this version
+  examDetails Json
+  createdAt DateTime @default(now())
+  createdBy String?
+
+  paper Paper @relation(fields: [paperId], references: [id], onDelete: Cascade)
+
+  @@unique([paperId, version])
+  @@map("paper_versions")
+}
+
+// ─────────────────────────────────────────
+// TEMPLATES
+// ─────────────────────────────────────────
+
+model Template {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  category    String   // school, college, coaching, competitive, minimal, luxury
+  config      Json     // TemplateConfig object (fonts, borders, colors, layout)
+  previewUrl  String?
+  isSystem    Boolean  @default(false) // built-in templates
+  isPublic    Boolean  @default(false)
+  userId      String?
+  usageCount  Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user   User?   @relation(fields: [userId], references: [id])
+  papers Paper[]
+
+  @@map("templates")
+}
+
+// ─────────────────────────────────────────
+// EXPORTS
+// ─────────────────────────────────────────
+
+model Export {
+  id         String       @id @default(cuid())
+  userId     String
+  paperId    String
+  format     ExportFormat
+  fileUrl    String?
+  fileSize   Int?         // bytes
+  fileName   String?
+  status     String       @default("pending") // pending, processing, ready, failed
+  createdAt  DateTime     @default(now())
+
+  user  User  @relation(fields: [userId], references: [id])
+  paper Paper @relation(fields: [paperId], references: [id])
+
+  @@map("exports")
+}
+
+// ─────────────────────────────────────────
+// AI CHAT
+// ─────────────────────────────────────────
+
+model AiChat {
+  id        String   @id @default(cuid())
+  userId    String
+  paperId   String?
+  messages  Json     // ChatMessage[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("ai_chats")
+}
+
+// ─────────────────────────────────────────
+// USAGE ANALYTICS
+// ─────────────────────────────────────────
+
+model UsageLog {
+  id        String   @id @default(cuid())
+  userId    String
+  action    String   // paper_created, paper_exported, ocr_processed, ai_chat, template_used
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+  @@map("usage_logs")
+}
