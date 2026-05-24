@@ -1,4 +1,3 @@
-// middleware/errorHandler.ts
 import { Request, Response, NextFunction } from 'express';
 import { logger } from '../utils/logger';
 
@@ -10,7 +9,6 @@ export function errorHandler(
 ) {
   logger.error(`Error: ${err.message}`, { stack: err.stack });
 
-  // Multer file size error
   if (err.code === 'LIMIT_FILE_SIZE') {
     return res.status(413).json({
       success: false,
@@ -18,7 +16,6 @@ export function errorHandler(
     });
   }
 
-  // Prisma known errors
   if (err.constructor.name === 'PrismaClientKnownRequestError') {
     const prismaErr = err as any;
     if (prismaErr.code === 'P2002') {
@@ -36,52 +33,4 @@ export function errorHandler(
       : err.message;
 
   res.status(status).json({ success: false, error: message });
-}
-
-// middleware/asyncHandler.ts
-import { Request, Response, NextFunction } from 'express';
-type AsyncFn = (req: Request, res: Response, next: NextFunction) => Promise<unknown>;
-
-export function asyncHandler(fn: AsyncFn) {
-  return (req: Request, res: Response, next: NextFunction) => {
-    Promise.resolve(fn(req, res, next)).catch(next);
-  };
-}
-
-// middleware/requireAdmin.ts
-export function requireAdmin(req: Request, res: Response, next: NextFunction) {
-  const user = (req as any).user;
-  if (user.role !== 'ADMIN' && user.role !== 'SUPER_ADMIN') {
-    return res.status(403).json({ success: false, error: 'Admin access required' });
-  }
-  next();
-}
-
-// middleware/checkLimits.ts
-import { prisma } from '../utils/prisma';
-
-export async function checkPaperLimit(req: Request, res: Response, next: NextFunction) {
-  const userId = (req as any).user.userId;
-
-  const subscription = await prisma.subscription.findUnique({
-    where: { userId },
-    include: { plan: true },
-  });
-
-  if (!subscription || !subscription.plan) {
-    return next(); // No subscription = free plan, handled elsewhere
-  }
-
-  const { plan, papersUsedThisMonth } = subscription;
-
-  // -1 means unlimited
-  if (plan.papersPerMonth !== -1 && papersUsedThisMonth >= plan.papersPerMonth) {
-    return res.status(429).json({
-      success: false,
-      error: `Monthly paper limit (${plan.papersPerMonth}) reached. Upgrade your plan to create more papers.`,
-      upgradeRequired: true,
-    });
-  }
-
-  next();
 }
