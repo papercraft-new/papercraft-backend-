@@ -281,11 +281,12 @@ router.post(
         cleanedText: successful.map(r => r.cleanedText).join('\n\n---\n\n'),
         confidence: successful.reduce((sum, r) => sum + r.confidence, 0) / successful.length,
         results: results.map(r => ({
-          filename: r.filename,
-          success: r.success,
-          questionsFound: r.questionsFound || 0,
-          error: r.success ? undefined : r.error,
-        })),
+  filename: r.filename,
+  success: r.success,
+  questionsFound: r.questionsFound || 0,
+  error: (r as { error?: string }).error,
+}))
+,
       },
     });
   })
