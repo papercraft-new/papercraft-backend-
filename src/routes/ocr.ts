@@ -9,6 +9,7 @@ import { uploadToCloudinary } from '../utils/cloudinary';
 import { logger } from '../utils/logger';
 import type { Section } from '../types';
 
+
 const router = Router();
 router.use(authenticate);
 
@@ -154,7 +155,7 @@ router.post(
   ocrLimiter,
   upload.array('files', 10),
   asyncHandler(async (req: Request, res: Response) => {
-    const files = req.files as Express.Multer.File[];
+   const files = req.files as any[];
 
     if (!files || files.length === 0) {
       return res.status(400).json({ success: false, error: 'No files uploaded' });
