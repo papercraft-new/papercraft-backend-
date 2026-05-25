@@ -7,6 +7,7 @@ import { rateLimit } from 'express-rate-limit';
 import dotenv from 'dotenv';
 import { errorHandler } from './middleware/errorHandler';
 import { logger } from './utils/logger';
+import { prisma } from './utils/prisma';
 
 // Routes
 import authRoutes from './routes/auth';
@@ -71,15 +72,26 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // HEALTH CHECK
 // ─────────────────────────────────────────
 
-app.get('/health', (_req, res) => {
-  res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    version: '1.0.0',
-    environment: process.env.NODE_ENV,
-  });
+app.get('/health', async (req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      version: '1.0.0',
+      environment: process.env.NODE_ENV || 'development',
+      database: 'connected',
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      timestamp: new Date().toISOString(),
+      environment: process.env.NODE_ENV || 'development',
+      database: 'disconnected',
+      error: String(err),
+    });
+  }
 });
-
 // ─────────────────────────────────────────
 // API ROUTES
 // ─────────────────────────────────────────
