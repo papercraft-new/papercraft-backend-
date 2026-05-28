@@ -9,6 +9,8 @@ import { logger } from '../utils/logger';
 import { asyncHandler } from '../middleware/asyncHandler';
 import { authenticate } from '../middleware/authenticate';
 import type { JwtPayload } from '../types';
+import nodemailer from 'nodemailer';
+import crypto from 'crypto';
 
 const router = Router();
 
@@ -22,7 +24,6 @@ const authLimiter = rateLimit({
 // ─────────────────────────────────────────
 // REGISTER
 // ─────────────────────────────────────────
-
 router.post(
   '/register',
   authLimiter,
@@ -33,19 +34,30 @@ router.post(
   ],
   asyncHandler(async (req: Request, res: Response) => {
     const errors = validationResult(req);
+
     if (!errors.isEmpty()) {
-      return res.status(400).json({ success: false, errors: errors.array() });
+      return res.status(400).json({
+        success: false,
+        errors: errors.array(),
+      });
     }
 
     const { email, password, name } = req.body;
 
-    const existingUser = await prisma.user.findUnique({ where: { email } });
+    const existingUser = await prisma.user.findUnique({
+      where: { email },
+    });
+
     if (existingUser) {
-      return res.status(409).json({ success: false, error: 'Email already registered' });
+      return res.status(409).json({
+        success: false,
+        error: 'Email already registered',
+      });
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
 
+    // Create user
     const user = await prisma.user.create({
       data: {
         email,
@@ -56,29 +68,129 @@ router.post(
             planId: await getFreePlanId(),
             status: 'ACTIVE',
             currentPeriodStart: new Date(),
-            currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+            currentPeriodEnd: new Date(
+              Date.now() + 30 * 24 * 60 * 60 * 1000
+            ),
           },
         },
       },
-      select: { id: true, email: true, name: true, role: true, avatarUrl: true },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+        avatarUrl: true,
+      },
     });
 
-    const token = signToken({ userId: user.id, email: user.email, role: user.role });
+    // Generate token
+    const token = signToken({
+      userId: user.id,
+      email: user.email,
+      role: user.role,
+    });
 
-    // Send welcome email (non-blocking)
-    sendEmail({
-      to: email,
-      subject: 'Welcome to PaperCraft AI! 🎉',
-      template: 'welcome',
-      data: { name },
-    }).catch((err) => logger.error('Welcome email failed:', err));
+    // Generate OTP
+    const otp = Math.floor(
+      100000 + Math.random() * 900000
+    ).toString();
+
+    const expiresAt = new Date(
+      Date.now() + 10 * 60 * 1000
+    );
+
+    // Delete old OTPs
+    await (prisma as any).emailOtp.deleteMany({
+      where: { email },
+    });
+
+    // Save OTP
+    await (prisma as any).emailOtp.create({
+      data: {
+        id: crypto.randomUUID(),
+        email,
+        otp,
+        expiresAt,
+        verified: false,
+      },
+    });
+
+    // Send OTP Email
+    try {
+      const transporter = nodemailer.createTransport({
+        host: process.env.SMTP_HOST || 'smtp.gmail.com',
+        port: parseInt(process.env.SMTP_PORT || '587'),
+        secure: false,
+        auth: {
+          user: process.env.SMTP_USER,
+          pass: process.env.SMTP_PASS,
+        },
+      });
+
+      await transporter.sendMail({
+        from: `"PaperCraft AI" <${process.env.SMTP_USER}>`,
+        to: email,
+        subject: 'Verify your PaperCraft AI account',
+        html: `
+          <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px">
+            <h1 style="color:#2563eb;text-align:center">
+              📋 PaperCraft AI
+            </h1>
+
+            <div style="background:#f8fafc;border-radius:12px;padding:24px;text-align:center">
+              <h2>Welcome ${name}! Verify your email</h2>
+
+              <p style="color:#64748b">
+                Your verification code:
+              </p>
+
+              <div style="
+                background:#2563eb;
+                color:white;
+                font-size:36px;
+                font-weight:bold;
+                letter-spacing:8px;
+                padding:16px 24px;
+                border-radius:8px;
+                margin:20px 0;
+                display:inline-block;
+              ">
+                ${otp}
+              </div>
+
+              <p style="color:#64748b;font-size:14px">
+                Expires in <strong>10 minutes</strong>
+              </p>
+            </div>
+          </div>
+        `,
+      });
+    } catch (emailErr) {
+      logger.warn(
+        'Failed to send verification email:',
+        emailErr
+      );
+    }
 
     logger.info(`New user registered: ${email}`);
 
-    res.status(201).json({
+    // Return response
+    return res.status(201).json({
       success: true,
-      data: { user, token },
-      message: 'Account created successfully',
+      data: {
+        user: {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          role: user.role,
+          avatarUrl: user.avatarUrl,
+          emailVerified: false,
+        },
+        token,
+        requiresVerification: true,
+        message:
+          'Account created. Please verify your email.',
+      },
     });
   })
 );
@@ -325,6 +437,7 @@ router.get(
     res.json({ success: true, data: user });
   })
 );
+
 
 // ─────────────────────────────────────────
 // LOGOUT

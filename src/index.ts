@@ -19,6 +19,10 @@ import exportRoutes from './routes/exports';
 import paymentRoutes from './routes/payments';
 import adminRoutes from './routes/admin';
 import aiRoutes from './routes/ai';
+import otpRoutes from './routes/otp';
+
+// Add with other routes:
+
 
 dotenv.config();
 
@@ -108,7 +112,7 @@ app.use('/api/exports', exportRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/ai', aiRoutes);
-
+app.use('/api/otp', otpRoutes); 
 // ─────────────────────────────────────────
 // ERROR HANDLING
 // ─────────────────────────────────────────
