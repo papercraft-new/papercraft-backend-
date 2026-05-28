@@ -400,3 +400,14 @@ model UsageLog {
   @@index([userId, createdAt])
   @@map("usage_logs")
 }
+model EmailOtp {
+  id        String   @id @default(cuid())
+  email     String
+  otp       String
+  expiresAt DateTime
+  verified  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@map("email_otps")
+  @@index([email])
+}
