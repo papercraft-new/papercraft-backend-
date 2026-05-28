@@ -8,13 +8,14 @@ const router = Router();
 
 function getTransporter() {
   return nodemailer.createTransport({
-    host: process.env.SMTP_HOST || 'smtp.gmail.com',
-    port: parseInt(process.env.SMTP_PORT || '587'),
-    secure: false,
+    service: 'gmail',
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS,
     },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 10000,
   });
 }
 
@@ -51,7 +52,10 @@ router.post('/send', asyncHandler(async (req: Request, res: Response) => {
 
   try {
     const transporter = getTransporter();
+    
 
+await transporter.verify();
+console.log('SMTP CONNECTED');
     await transporter.sendMail({
       from: `"PaperCraft AI" <${process.env.SMTP_USER}>`,
       to: email,
@@ -192,6 +196,8 @@ router.post('/resend', asyncHandler(async (req: Request, res: Response) => {
   try {
     const transporter = getTransporter();
 
+await transporter.verify();
+console.log('SMTP CONNECTED');
     await transporter.sendMail({
       from: `"PaperCraft AI" <${process.env.SMTP_USER}>`,
       to: email,
