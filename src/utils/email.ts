@@ -1,4 +1,3 @@
-// utils/email.ts
 import nodemailer from 'nodemailer';
 import { logger } from './logger';
 
@@ -10,12 +9,15 @@ interface EmailOptions {
 }
 
 const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: parseInt(process.env.SMTP_PORT || '587'),
+  host: 'smtp.gmail.com',
+  port: 587,
   secure: false,
+  requireTLS: true,
   pool: true,
-connectionTimeout: 10000,
-socketTimeout: 10000,
+  connectionTimeout: 10000,
+  greetingTimeout: 10000,
+  socketTimeout: 10000,
+  dnsTimeout: 10000,
   auth: {
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS,
@@ -75,12 +77,15 @@ const templates: Record<string, (data: Record<string, string>) => string> = {
 
 export async function sendEmail({ to, subject, template, data }: EmailOptions): Promise<void> {
   const html = templates[template]?.(data);
+
   if (!html) {
     throw new Error(`Unknown email template: ${template}`);
   }
 
+  await transporter.verify();
+
   await transporter.sendMail({
-    from: process.env.EMAIL_FROM || 'PaperCraft AI <noreply@papercraft.ai>',
+    from: process.env.EMAIL_FROM || `"PaperCraft AI" <${process.env.SMTP_USER}>`,
     to,
     subject,
     html,

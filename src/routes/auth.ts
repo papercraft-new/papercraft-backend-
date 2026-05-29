@@ -118,20 +118,20 @@ router.post(
     // Send OTP Email
     try {
       const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST || 'smtp.gmail.com',
-  port: parseInt(process.env.SMTP_PORT || '587'),
-  secure: false,
-  pool: true,
-connectionTimeout: 10000,
-socketTimeout: 10000,
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-  tls: {
-    rejectUnauthorized: false,  // ← ADD THIS LINE
-  },
-});
+        host: process.env.SMTP_HOST || 'smtp.gmail.com',
+        port: parseInt(process.env.SMTP_PORT || '587'),
+        secure: false,
+        pool: true,
+        connectionTimeout: 10000,
+        socketTimeout: 10000,
+        auth: {
+          user: process.env.SMTP_USER,
+          pass: process.env.SMTP_PASS,
+        },
+        tls: {
+          rejectUnauthorized: false,
+        },
+      });
 
       await transporter.sendMail({
         from: `"Paptrix AI" <${process.env.SMTP_USER}>`,
@@ -340,17 +340,6 @@ router.post(
 );
 
 // ─────────────────────────────────────────
-// FORGOT PASSWORD
-// ─────────────────────────────────────────
-
-
-// ─────────────────────────────────────────
-// RESET PASSWORD
-// ─────────────────────────────────────────
-
-
-
-// ─────────────────────────────────────────
 // GET CURRENT USER
 // ─────────────────────────────────────────
 
@@ -386,7 +375,6 @@ router.get(
   })
 );
 
-
 // ─────────────────────────────────────────
 // LOGOUT
 // ─────────────────────────────────────────
@@ -395,8 +383,6 @@ router.post(
   '/logout',
   authenticate,
   asyncHandler(async (_req: Request, res: Response) => {
-    // In a stateless JWT system, logout is client-side token deletion.
-    // For session-based, invalidate the session here.
     res.json({ success: true, message: 'Logged out successfully' });
   })
 );
@@ -438,116 +424,102 @@ async function getFreePlanId(): Promise<string> {
   }
   return freePlan.id;
 }
+
 // ─────────────────────────────────────────
 // FORGOT PASSWORD
 // POST /api/auth/forgot-password
 // ─────────────────────────────────────────
-router.post('/forgot-password', asyncHandler(async (req: Request, res: Response) => {
-  const { email } = req.body;
+router.post(
+  '/forgot-password',
+  authLimiter,
+  [body('email').isEmail().normalizeEmail().withMessage('Valid email required')],
+  asyncHandler(async (req: Request, res: Response) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
 
-  if (!email) {
-    return res.status(400).json({ success: false, error: 'Email is required' });
-  }
+    const { email } = req.body;
 
-  const user = await prisma.user.findUnique({ where: { email } });
+    const user = await prisma.user.findUnique({ where: { email } });
 
-  // Always return success even if user not found (security)
-  if (!user) {
-    return res.json({ success: true, data: { message: 'If this email exists, a reset link has been sent.' } });
-  }
+    // Always return success even if user not found (security)
+    if (!user) {
+      return res.json({
+        success: true,
+        data: { message: 'If this email exists, a reset link has been sent.' },
+      });
+    }
 
-  // Generate reset token
-  const resetToken = crypto.randomBytes(32).toString('hex');
-  const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+    // Generate reset token
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
 
-  await prisma.passwordReset.create({
-    data: {
-      id: crypto.randomUUID(),
-      userId: user.id,
-      token: resetToken,
-      expiresAt,
-    },
-  });
-
-  // Send reset email
-const resetUrl =
-`${process.env.FRONTEND_URL}/auth/reset-password?token=${resetToken}&email=${encodeURIComponent(email)}`
-
-  try {
-    const nodemailer = await import('nodemailer');
-    const transporter =
-nodemailer.default.createTransport({
-  service: 'gmail',
-  auth: {
-    user:
-      process.env.SMTP_USER,
-    pass:
-      process.env.SMTP_PASS,
-  },
-  connectionTimeout: 30000,
-  greetingTimeout: 30000,
-  socketTimeout: 30000,
-});
-
-    await transporter.sendMail({
-      from: `"PaperCraft AI" <${process.env.SMTP_USER}>`,
-      to: email,
-      subject: 'Reset Your PaperCraft AI Password',
-      html: `
-        <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px">
-          <div style="text-align:center;margin-bottom:24px">
-            <h1 style="color:#2563eb;font-size:24px;margin:0">📋 PaperCraft AI</h1>
-          </div>
-          <div style="background:#f8fafc;border-radius:12px;padding:24px;text-align:center">
-            <h2 style="color:#1e293b;margin-top:0">Reset Your Password</h2>
-            <p style="color:#64748b">Click the button below to reset your password.</p>
-            <p style="color:#64748b">This link expires in <strong>1 hour</strong>.</p>
-            <a href="${resetUrl}"
-              style="display:inline-block;margin:20px 0;padding:12px 32px;background:#2563eb;color:#fff;text-decoration:none;border-radius:8px;font-weight:bold;font-size:16px">
-              Reset Password
-            </a>
-            <p style="color:#94a3b8;font-size:12px">If you did not request this, ignore this email.</p>
-            <p style="color:#94a3b8;font-size:11px;margin-top:8px">
-              Or copy this link:<br/>
-              <span style="color:#2563eb;word-break:break-all">${resetUrl}</span>
-            </p>
-          </div>
-        </div>
-      `,
+    // Delete old unused tokens first
+    await prisma.passwordReset.deleteMany({
+      where: {
+        userId: user.id,
+        usedAt: null,
+      },
     });
 
-    logger.info(`Password reset email sent to ${email}`);
-  } catch (emailErr) {
-    logger.error('Failed to send reset email:', emailErr);
-    return res.status(500).json({ success: false, error: 'Failed to send reset email. Check SMTP config.' });
-  }
+    // Create new reset token
+    await prisma.passwordReset.create({
+      data: {
+        id: crypto.randomUUID(),
+        userId: user.id,
+        token: resetToken,
+        expiresAt,
+      },
+    });
 
-  res.json({ success: true, data: { message: 'If this email exists, a reset link has been sent.' } });
-}));
+    // Send reset email using shared sendEmail utility
+    const resetUrl = `${process.env.FRONTEND_URL}/auth/reset-password?token=${resetToken}&email=${encodeURIComponent(email)}`;
+
+    try {
+      await sendEmail({
+        to: email,
+        subject: 'Reset Your PaperCraft AI Password',
+        template: 'password-reset',
+        data: {
+          name: user.name || 'there',
+          resetUrl,
+        },
+      });
+
+      logger.info(`Password reset email sent to ${email}`);
+    } catch (emailErr) {
+      logger.error('Failed to send reset email:', emailErr);
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to send reset email. Check SMTP config.',
+      });
+    }
+
+    res.json({
+      success: true,
+      data: { message: 'If this email exists, a reset link has been sent.' },
+    });
+  })
+);
 
 // ─────────────────────────────────────────
 // RESET PASSWORD
 // POST /api/auth/reset-password
 // ─────────────────────────────────────────
 router.post('/reset-password', asyncHandler(async (req: Request, res: Response) => {
-const {
-  token,
-  email,
-  newPassword
-} = req.body;
+  const { token, email, newPassword } = req.body;
 
-console.log('REQ BODY:', req.body);
+  console.log('REQ BODY:', req.body);
 
-if (!token || !email || !newPassword) {
-  return res.status(400).json({
-    success: false,
-    error:
-      'Token, email and new password are required',
-  });
-}
+  if (!token || !email || !newPassword) {
+    return res.status(400).json({
+      success: false,
+      error: 'Token, email and new password are required',
+    });
+  }
 
-const resetRecord =
-  await prisma.passwordReset.findFirst({
+  const resetRecord = await prisma.passwordReset.findFirst({
     where: {
       token: token.trim(),
       usedAt: null,
@@ -557,53 +529,38 @@ const resetRecord =
     },
   });
 
-console.log(
-  'RESET RECORD:',
-  resetRecord
-);
+  console.log('RESET RECORD:', resetRecord);
 
-if (!resetRecord) {
-  return res.status(400).json({
-    success: false,
-    error:
-      'Invalid or expired reset link. Please request a new one.',
-  });
-}
+  if (!resetRecord) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid or expired reset link. Please request a new one.',
+    });
+  }
 
-if (
-  new Date() >
-  resetRecord.expiresAt
-) {
-  await prisma.passwordReset.delete({
-    where: {
-      id: resetRecord.id,
-    },
-  });
+  if (new Date() > resetRecord.expiresAt) {
+    await prisma.passwordReset.delete({
+      where: {
+        id: resetRecord.id,
+      },
+    });
 
-  return res.status(400).json({
-    success: false,
-    error:
-      'Reset link has expired. Please request a new one.',
-  });
-}
+    return res.status(400).json({
+      success: false,
+      error: 'Reset link has expired. Please request a new one.',
+    });
+  }
 
-if (
-  resetRecord.user.email
-    .toLowerCase()
-    .trim() !==
-  email.toLowerCase().trim()
-) {
-  console.log(
-    'EMAIL MISMATCH:',
-    resetRecord.user.email,
-    email
-  );
+  if (
+    resetRecord.user.email.toLowerCase().trim() !== email.toLowerCase().trim()
+  ) {
+    console.log('EMAIL MISMATCH:', resetRecord.user.email, email);
 
-  return res.status(400).json({
-    success: false,
-    error: 'Invalid reset link.',
-  });
-}
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid reset link.',
+    });
+  }
 
   // Hash new password
   const bcrypt = await import('bcryptjs');
