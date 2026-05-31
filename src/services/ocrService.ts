@@ -907,19 +907,21 @@ function parseAiResponse(
       throw new Error('No sections in response');
     }
 
-    const sections: Section[] = parsed.sections.map(
-      (s: Record<string, unknown>, si: number) => ({
-        id: (s.id as string) || `sec_${si + 1}`,
-        title: (s.title as string) || `Section ${si + 1}`,
-        description: s.description as string | undefined,
-        questionType: s.questionType as string | undefined,
-        marksPerQuestion: s.marksPerQuestion as number | undefined,
-        totalMarks: (s.totalMarks as number) || 0,
-        questions: ((s.questions as Record<string, unknown>[]) || []).map((q, qi) =>
-          normalizeQuestion(q, qi)
-        ),
-      })
-    );
+ let sections: Section[] = parsed.sections.map(
+  (s: Record<string, unknown>, si: number) => ({
+    id: (s.id as string) || `sec_${si + 1}`,
+    title: (s.title as string) || `Section ${si + 1}`,
+    description: s.description as string | undefined,
+    questionType: s.questionType as string | undefined,
+    marksPerQuestion: s.marksPerQuestion as number | undefined,
+    totalMarks: (s.totalMarks as number) || 0,
+    questions: ((s.questions as Record<string, unknown>[]) || []).map((q, qi) =>
+      normalizeQuestion(q, qi)
+    ),
+  })
+);
+
+sections = renumberQuestionsPerSection(sections);
 
     sections.forEach((sec) => {
       sec.totalMarks = sec.questions.reduce((sum, q) => sum + q.marks, 0);
@@ -980,7 +982,7 @@ function normalizeQuestion(q: Record<string, unknown>, index: number): Question 
 
   return {
     id: (q.id as string) || uuidv4(),
-    number: (q.number as number) || index + 1,
+   number: index + 1,
     type: type as Question['type'],
     text: questionText,
     marks: (q.marks as number) || 1,
@@ -990,7 +992,15 @@ function normalizeQuestion(q: Record<string, unknown>, index: number): Question 
     topic: q.topic as string | undefined,
   };
 }
-
+function renumberQuestionsPerSection(sections: Section[]): Section[] {
+  return sections.map((section) => ({
+    ...section,
+    questions: section.questions.map((question, index) => ({
+      ...question,
+      number: index + 1,
+    })),
+  }));
+}
 // ─────────────────────────────────────────
 // RULE-BASED FALLBACK PARSER
 // ─────────────────────────────────────────
@@ -1131,8 +1141,9 @@ function ruleBasedParse(text: string): { cleanedText: string; sections: Section[
       }],
     });
   }
-
-  return { cleanedText: text, sections };
+const renumberedSections = renumberQuestionsPerSection(sections);
+return { cleanedText: text, sections: renumberedSections };
+  
 }
 
 // ─────────────────────────────────────────
