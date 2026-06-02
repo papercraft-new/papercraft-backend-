@@ -1,4 +1,4 @@
-import { Resend } from 'resend';
+import nodemailer from 'nodemailer';
 import { logger } from './logger';
 
 interface EmailOptions {
@@ -8,39 +8,44 @@ interface EmailOptions {
   data: Record<string, string>;
 }
 
-let resend: Resend | null = null;
+let transporter: nodemailer.Transporter | null = null;
 
-function getResend(): Resend {
-  if (!resend) {
-    resend = new Resend(process.env.RESEND_API_KEY);
+export function getTransporter(): nodemailer.Transporter {
+  if (!transporter) {
+    transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST || 'smtp-relay.brevo.com',
+      port: parseInt(process.env.SMTP_PORT || '587'),
+      secure: false,
+      requireTLS: true,
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+      },
+      tls: {
+        rejectUnauthorized: false,
+      },
+      connectionTimeout: 15000,
+      socketTimeout: 15000,
+      pool: true,
+      maxConnections: 3,
+    });
   }
-  return resend;
+  return transporter;
 }
 
 export async function verifyEmailTransporter(): Promise<void> {
-  if (!process.env.RESEND_API_KEY) {
-    logger.error('❌ RESEND_API_KEY is not set. Emails will not work.');
-    return;
+  try {
+    await getTransporter().verify();
+    logger.info('✅ SMTP transporter verified successfully');
+  } catch (err: any) {
+    logger.error('❌ SMTP transporter verification failed:');
+    logger.error('Error message: ' + (err.message || 'unknown'));
+    logger.error('Error code: ' + (err.code || 'none'));
+    logger.error('SMTP_HOST: ' + (process.env.SMTP_HOST || 'not set'));
+    logger.error('SMTP_PORT: ' + (process.env.SMTP_PORT || 'not set'));
+    logger.error('SMTP_USER present: ' + !!process.env.SMTP_USER);
+    logger.error('SMTP_PASS present: ' + !!process.env.SMTP_PASS);
   }
-  logger.info('✅ Resend email service ready');
-}
-
-// Keep getTransporter export so otp.ts/auth.ts imports don't break
-// but internally we now use Resend
-export function getTransporter() {
-  return {
-    sendMail: async (opts: { from: string; to: string; subject: string; html: string }) => {
-      const result = await getResend().emails.send({
-        from: opts.from,
-        to: opts.to,
-        subject: opts.subject,
-        html: opts.html,
-      });
-      if (result.error) throw new Error(result.error.message);
-      return result;
-    },
-    verify: async () => true,
-  };
 }
 
 const templates: Record<string, (data: Record<string, string>) => string> = {
@@ -90,14 +95,12 @@ export async function sendEmail({ to, subject, template, data }: EmailOptions): 
   const html = templates[template]?.(data);
   if (!html) throw new Error(`Unknown email template: ${template}`);
 
-  const result = await getResend().emails.send({
-    from: process.env.RESEND_FROM || 'PaperCraft AI <onboarding@resend.dev>',
+  await getTransporter().sendMail({
+    from: `"PaperCraft AI" <${process.env.SMTP_USER}>`,
     to,
     subject,
     html,
   });
-
-  if (result.error) throw new Error(result.error.message);
 
   logger.info(`Email sent: ${template} → ${to}`);
 }
