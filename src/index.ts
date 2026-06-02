@@ -20,8 +20,7 @@ import paymentRoutes from './routes/payments';
 import adminRoutes from './routes/admin';
 import aiRoutes from './routes/ai';
 import otpRoutes from './routes/otp';
-
-// Add with other routes:
+import { verifyEmailTransporter } from './utils/email';
 
 
 dotenv.config();
@@ -133,6 +132,9 @@ app.listen(PORT, () => {
   logger.info(`🚀 PaperCraft AI Server running on port ${PORT}`);
   logger.info(`📚 Environment: ${process.env.NODE_ENV}`);
   logger.info(`🌐 Frontend URL: ${process.env.FRONTEND_URL}`);
+
+  // Verify SMTP on startup so misconfiguration is caught immediately in Render logs
+  verifyEmailTransporter();
 });
 
 export default app;

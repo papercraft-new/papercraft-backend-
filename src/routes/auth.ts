@@ -4,41 +4,14 @@ import jwt from 'jsonwebtoken';
 import { body, validationResult } from 'express-validator';
 import { rateLimit } from 'express-rate-limit';
 import { prisma } from '../utils/prisma';
-import { sendEmail } from '../utils/email';
+import { sendEmail, getTransporter } from '../utils/email';
 import { logger } from '../utils/logger';
 import { asyncHandler } from '../middleware/asyncHandler';
 import { authenticate } from '../middleware/authenticate';
 import type { JwtPayload } from '../types';
-import nodemailer from 'nodemailer';
 import crypto from 'crypto';
 
 const router = Router();
-
-// ─────────────────────────────────────────
-// SHARED TRANSPORTER (lazy, created once)
-// ─────────────────────────────────────────
-let transporter: nodemailer.Transporter | null = null;
-
-function getTransporter() {
-  if (!transporter) {
-    transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST || 'smtp.gmail.com',
-      port: parseInt(process.env.SMTP_PORT || '587'),
-      secure: false,
-      requireTLS: true, // CRITICAL for Gmail on Render/cloud IPs
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS,
-      },
-      tls: {
-        rejectUnauthorized: false,
-      },
-      connectionTimeout: 10000,
-      socketTimeout: 10000,
-    });
-  }
-  return transporter;
-}
 
 // ─────────────────────────────────────────
 // RATE LIMITER
@@ -380,6 +353,7 @@ router.post(
           resetUrl,
         },
       });
+      console.log("hi");
       logger.info(`Password reset email sent to ${email}`);
     } catch (emailErr) {
       logger.error('Failed to send reset email:', emailErr);

@@ -9,28 +9,51 @@ interface EmailOptions {
   data: Record<string, string>;
 }
 
-// Lazy transporter — created on first use so env vars are guaranteed to be loaded
+// Singleton transporter — created once, reused for all emails.
+// All email sending in the app (auth.ts, otp.ts) should import from here.
 let transporter: nodemailer.Transporter | null = null;
 
-function getTransporter() {
+export function getTransporter(): nodemailer.Transporter {
   if (!transporter) {
     transporter = nodemailer.createTransport({
       host: process.env.SMTP_HOST || 'smtp.gmail.com',
       port: parseInt(process.env.SMTP_PORT || '587'),
+      // secure:false + requireTLS:true = STARTTLS on port 587 (correct for Gmail)
       secure: false,
-      requireTLS: true, // ← CRITICAL for Gmail on Render/cloud IPs
+      requireTLS: true,
       auth: {
         user: process.env.SMTP_USER,
         pass: process.env.SMTP_PASS,
       },
       tls: {
+        // Render/cloud IPs sometimes have cert chain issues; keep false for Gmail
         rejectUnauthorized: false,
       },
-      connectionTimeout: 10000,
-      socketTimeout: 10000,
+      // Generous timeouts for cold-start cloud containers
+      connectionTimeout: 15000,
+      socketTimeout: 15000,
+      // Keep connection alive between requests
+      pool: true,
+      maxConnections: 3,
     });
   }
   return transporter;
+}
+
+/**
+ * Call this once at startup (in index.ts) to fail fast if SMTP creds are wrong.
+ * Logs success/failure but does NOT crash the server — email is non-critical infra.
+ */
+export async function verifyEmailTransporter(): Promise<void> {
+  try {
+    await getTransporter().verify();
+    logger.info('✅ SMTP transporter verified successfully');
+  } catch (err: any) {
+    logger.error('❌ SMTP transporter verification failed:', err.message || err);
+    logger.error(
+      'Email will not work. Check SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS env vars on Render.'
+    );
+  }
 }
 
 const templates: Record<string, (data: Record<string, string>) => string> = {
@@ -83,7 +106,7 @@ export async function sendEmail({ to, subject, template, data }: EmailOptions): 
   }
 
   await getTransporter().sendMail({
-    from: `"PaperCraft AI" <${process.env.SMTP_USER}>`,  // ← Must match SMTP_USER for Gmail
+    from: `"PaperCraft AI" <${process.env.SMTP_USER}>`,
     to,
     subject,
     html,

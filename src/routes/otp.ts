@@ -2,24 +2,10 @@ import { Router, Request, Response } from 'express';
 import { prisma } from '../utils/prisma';
 import { asyncHandler } from '../middleware/asyncHandler';
 import { logger } from '../utils/logger';
-import nodemailer from 'nodemailer';
+// Use the shared singleton transporter — same config used everywhere in the app
+import { getTransporter } from '../utils/email';
 
 const router = Router();
-
-function getTransporter() {
-  return nodemailer.createTransport({
-    host: process.env.SMTP_HOST || 'smtp.gmail.com',
-    port: parseInt(process.env.SMTP_PORT || '587'),
-    secure: false,
-    pool: true,
-connectionTimeout: 10000,
-socketTimeout: 10000,
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
-    },
-  });
-}
 
 function generateOtp(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -36,9 +22,7 @@ router.post('/send', asyncHandler(async (req: Request, res: Response) => {
     });
   }
 
-  await (prisma as any).emailOtp.deleteMany({
-    where: { email },
-  });
+  await (prisma as any).emailOtp.deleteMany({ where: { email } });
 
   const otp = generateOtp();
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
@@ -53,18 +37,29 @@ router.post('/send', asyncHandler(async (req: Request, res: Response) => {
   });
 
   try {
-    const transporter = getTransporter();
-
-    await transporter.sendMail({
+    await getTransporter().sendMail({
       from: `"PaperCraft AI" <${process.env.SMTP_USER}>`,
       to: email,
       subject: 'Your PaperCraft AI Verification Code',
       html: `
-        <div>
-          <h2>PaperCraft AI Verification</h2>
-          <p>Your OTP is:</p>
-          <h1>${otp}</h1>
-          <p>This OTP expires in 10 minutes.</p>
+        <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px">
+          <h1 style="color:#2563eb;text-align:center">📋 PaperCraft AI</h1>
+          <div style="background:#f8fafc;border-radius:12px;padding:24px;text-align:center">
+            <h2>Verify your email</h2>
+            <p style="color:#64748b">Your verification code:</p>
+            <div style="
+              background:#2563eb;
+              color:white;
+              font-size:36px;
+              font-weight:bold;
+              letter-spacing:8px;
+              padding:16px 24px;
+              border-radius:8px;
+              margin:20px 0;
+              display:inline-block;
+            ">${otp}</div>
+            <p style="color:#64748b;font-size:14px">Expires in <strong>10 minutes</strong></p>
+          </div>
         </div>
       `,
     });
@@ -73,21 +68,16 @@ router.post('/send', asyncHandler(async (req: Request, res: Response) => {
 
     return res.json({
       success: true,
-      data: {
-        message: 'OTP sent successfully',
-        expiresIn: 600,
-      },
+      data: { message: 'OTP sent successfully', expiresIn: 600 },
     });
-  } catch (emailErr) {
-    logger.error('Failed to send OTP email:', emailErr);
+  } catch (emailErr: any) {
+    logger.error('Failed to send OTP email:', emailErr.message || emailErr);
 
-    await (prisma as any).emailOtp.deleteMany({
-      where: { email },
-    });
+    await (prisma as any).emailOtp.deleteMany({ where: { email } });
 
     return res.status(500).json({
       success: false,
-      error: 'Failed to send OTP. Check email configuration.',
+      error: 'Failed to send OTP. Please check your email address or try again later.',
     });
   }
 }));
@@ -97,39 +87,21 @@ router.post('/verify', asyncHandler(async (req: Request, res: Response) => {
   const { email, otp } = req.body;
 
   if (!email || !otp) {
-    return res.status(400).json({
-      success: false,
-      error: 'Email and OTP are required',
-    });
+    return res.status(400).json({ success: false, error: 'Email and OTP are required' });
   }
 
   const record = await (prisma as any).emailOtp.findFirst({
-    where: {
-      email,
-      otp,
-      verified: false,
-    },
-    orderBy: {
-      createdAt: 'desc',
-    },
+    where: { email, otp, verified: false },
+    orderBy: { createdAt: 'desc' },
   });
 
   if (!record) {
-    return res.status(400).json({
-      success: false,
-      error: 'Invalid OTP. Please check and try again.',
-    });
+    return res.status(400).json({ success: false, error: 'Invalid OTP. Please check and try again.' });
   }
 
   if (new Date() > record.expiresAt) {
-    await (prisma as any).emailOtp.delete({
-      where: { id: record.id },
-    });
-
-    return res.status(400).json({
-      success: false,
-      error: 'OTP has expired. Please request a new one.',
-    });
+    await (prisma as any).emailOtp.delete({ where: { id: record.id } });
+    return res.status(400).json({ success: false, error: 'OTP has expired. Please request a new one.' });
   }
 
   await (prisma as any).emailOtp.update({
@@ -139,19 +111,12 @@ router.post('/verify', asyncHandler(async (req: Request, res: Response) => {
 
   await prisma.user.updateMany({
     where: { email },
-    data: {
-      emailVerified: true,
-    },
+    data: { emailVerified: true },
   });
 
   logger.info(`OTP verified for ${email}`);
 
-  return res.json({
-    success: true,
-    data: {
-      message: 'Email verified successfully',
-    },
-  });
+  return res.json({ success: true, data: { message: 'Email verified successfully' } });
 }));
 
 // RESEND OTP
@@ -159,74 +124,58 @@ router.post('/resend', asyncHandler(async (req: Request, res: Response) => {
   const { email } = req.body;
 
   if (!email) {
-    return res.status(400).json({
-      success: false,
-      error: 'Email is required',
-    });
+    return res.status(400).json({ success: false, error: 'Email is required' });
   }
 
-  const user = await prisma.user.findUnique({
-    where: { email },
-  });
-
+  const user = await prisma.user.findUnique({ where: { email } });
   if (!user) {
-    return res.status(404).json({
-      success: false,
-      error: 'No account found with this email',
-    });
+    return res.status(404).json({ success: false, error: 'No account found with this email' });
   }
 
-  await (prisma as any).emailOtp.deleteMany({
-    where: { email },
-  });
+  await (prisma as any).emailOtp.deleteMany({ where: { email } });
 
   const otp = generateOtp();
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
   await (prisma as any).emailOtp.create({
-    data: {
-      email,
-      otp,
-      expiresAt,
-      verified: false,
-    },
+    data: { email, otp, expiresAt, verified: false },
   });
 
   try {
-    const transporter = getTransporter();
-
-    await transporter.sendMail({
+    await getTransporter().sendMail({
       from: `"PaperCraft AI" <${process.env.SMTP_USER}>`,
       to: email,
       subject: 'Your New PaperCraft AI Verification Code',
       html: `
-        <div>
-          <h2>PaperCraft AI Verification</h2>
-          <p>Your new OTP is:</p>
-          <h1>${otp}</h1>
-          <p>This OTP expires in 10 minutes.</p>
+        <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px">
+          <h1 style="color:#2563eb;text-align:center">📋 PaperCraft AI</h1>
+          <div style="background:#f8fafc;border-radius:12px;padding:24px;text-align:center">
+            <h2>New Verification Code</h2>
+            <p style="color:#64748b">Your new OTP is:</p>
+            <div style="
+              background:#2563eb;
+              color:white;
+              font-size:36px;
+              font-weight:bold;
+              letter-spacing:8px;
+              padding:16px 24px;
+              border-radius:8px;
+              margin:20px 0;
+              display:inline-block;
+            ">${otp}</div>
+            <p style="color:#64748b;font-size:14px">Expires in <strong>10 minutes</strong></p>
+          </div>
         </div>
       `,
     });
 
-    return res.json({
-      success: true,
-      data: {
-        message: 'New OTP sent',
-        expiresIn: 600,
-      },
-    });
-  } catch (emailErr) {
-    logger.error('Failed to resend OTP email:', emailErr);
+    return res.json({ success: true, data: { message: 'New OTP sent', expiresIn: 600 } });
+  } catch (emailErr: any) {
+    logger.error('Failed to resend OTP email:', emailErr.message || emailErr);
 
-    await (prisma as any).emailOtp.deleteMany({
-      where: { email },
-    });
+    await (prisma as any).emailOtp.deleteMany({ where: { email } });
 
-    return res.status(500).json({
-      success: false,
-      error: 'Failed to send OTP email.',
-    });
+    return res.status(500).json({ success: false, error: 'Failed to send OTP email.' });
   }
 }));
 
