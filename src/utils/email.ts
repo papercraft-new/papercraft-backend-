@@ -1,4 +1,3 @@
-import nodemailer from 'nodemailer';
 import { logger } from './logger';
 
 interface EmailOptions {
@@ -8,44 +7,46 @@ interface EmailOptions {
   data: Record<string, string>;
 }
 
-let transporter: nodemailer.Transporter | null = null;
+async function sendBrevoEmail(to: string, subject: string, html: string): Promise<void> {
+  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+      'api-key': process.env.BREVO_API_KEY || '',
+    },
+    body: JSON.stringify({
+      sender: {
+        name: 'PaperCraft AI',
+        email: process.env.SMTP_USER, // your Brevo login email
+      },
+      to: [{ email: to }],
+      subject,
+      htmlContent: html,
+    }),
+  });
 
-export function getTransporter(): nodemailer.Transporter {
-  if (!transporter) {
-    transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST || 'smtp-relay.brevo.com',
-      port: parseInt(process.env.SMTP_PORT || '587'),
-      secure: false,
-      requireTLS: true,
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS,
-      },
-      tls: {
-        rejectUnauthorized: false,
-      },
-      connectionTimeout: 15000,
-      socketTimeout: 15000,
-      pool: true,
-      maxConnections: 3,
-    });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(`Brevo API error: ${JSON.stringify(error)}`);
   }
-  return transporter;
+}
+
+export function getTransporter() {
+  return {
+    sendMail: async (opts: { from: string; to: string; subject: string; html: string }) => {
+      await sendBrevoEmail(opts.to, opts.subject, opts.html);
+    },
+    verify: async () => true,
+  };
 }
 
 export async function verifyEmailTransporter(): Promise<void> {
-  try {
-    await getTransporter().verify();
-    logger.info('✅ SMTP transporter verified successfully');
-  } catch (err: any) {
-    logger.error('❌ SMTP transporter verification failed:');
-    logger.error('Error message: ' + (err.message || 'unknown'));
-    logger.error('Error code: ' + (err.code || 'none'));
-    logger.error('SMTP_HOST: ' + (process.env.SMTP_HOST || 'not set'));
-    logger.error('SMTP_PORT: ' + (process.env.SMTP_PORT || 'not set'));
-    logger.error('SMTP_USER present: ' + !!process.env.SMTP_USER);
-    logger.error('SMTP_PASS present: ' + !!process.env.SMTP_PASS);
+  if (!process.env.BREVO_API_KEY) {
+    logger.error('❌ BREVO_API_KEY is not set. Emails will not work.');
+    return;
   }
+  logger.info('✅ Brevo HTTP API email service ready');
 }
 
 const templates: Record<string, (data: Record<string, string>) => string> = {
@@ -95,12 +96,7 @@ export async function sendEmail({ to, subject, template, data }: EmailOptions): 
   const html = templates[template]?.(data);
   if (!html) throw new Error(`Unknown email template: ${template}`);
 
-  await getTransporter().sendMail({
-    from: `"PaperCraft AI" <${process.env.SMTP_USER}>`,
-    to,
-    subject,
-    html,
-  });
+  await sendBrevoEmail(to, subject, html);
 
   logger.info(`Email sent: ${template} → ${to}`);
 }
