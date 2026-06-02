@@ -49,10 +49,14 @@ export async function verifyEmailTransporter(): Promise<void> {
     await getTransporter().verify();
     logger.info('✅ SMTP transporter verified successfully');
   } catch (err: any) {
-    logger.error('❌ SMTP transporter verification failed:', err.message || err);
-    logger.error(
-      'Email will not work. Check SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS env vars on Render.'
-    );
+    logger.error('❌ SMTP transporter verification failed:');
+    logger.error('Error message: ' + (err.message || 'unknown'));
+    logger.error('Error code: ' + (err.code || 'none'));
+    logger.error('Response: ' + (err.response || 'none'));
+    logger.error('SMTP_USER present: ' + !!process.env.SMTP_USER);
+    logger.error('SMTP_PASS present: ' + !!process.env.SMTP_PASS);
+    logger.error('SMTP_HOST: ' + (process.env.SMTP_HOST || 'not set'));
+    logger.error('SMTP_PORT: ' + (process.env.SMTP_PORT || 'not set'));
   }
 }
 
