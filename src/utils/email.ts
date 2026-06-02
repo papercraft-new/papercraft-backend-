@@ -15,24 +15,19 @@ let transporter: nodemailer.Transporter | null = null;
 
 export function getTransporter(): nodemailer.Transporter {
   if (!transporter) {
-    transporter = nodemailer.createTransport({
+transporter = nodemailer.createTransport({
       host: process.env.SMTP_HOST || 'smtp.gmail.com',
-      port: parseInt(process.env.SMTP_PORT || '587'),
-      // secure:false + requireTLS:true = STARTTLS on port 587 (correct for Gmail)
-      secure: false,
-      requireTLS: true,
+      port: parseInt(process.env.SMTP_PORT || '465'),
+      secure: true,           // SSL on port 465 — works on Render free tier
       auth: {
         user: process.env.SMTP_USER,
         pass: process.env.SMTP_PASS,
       },
       tls: {
-        // Render/cloud IPs sometimes have cert chain issues; keep false for Gmail
         rejectUnauthorized: false,
       },
-      // Generous timeouts for cold-start cloud containers
       connectionTimeout: 15000,
       socketTimeout: 15000,
-      // Keep connection alive between requests
       pool: true,
       maxConnections: 3,
     });
