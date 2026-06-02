@@ -17,7 +17,7 @@ export function getTransporter(): nodemailer.Transporter {
   if (!transporter) {
 transporter = nodemailer.createTransport({
       host: process.env.SMTP_HOST || 'smtp.gmail.com',
-      port: parseInt(process.env.SMTP_PORT || '465'),
+      port: parseInt(process.env.SMTP_PORT || '443'),
       secure: true,           // SSL on port 465 — works on Render free tier
       auth: {
         user: process.env.SMTP_USER,
