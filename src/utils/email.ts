@@ -17,7 +17,7 @@ async function sendBrevoEmail(to: string, subject: string, html: string): Promis
     },
     body: JSON.stringify({
       sender: {
-        name: 'PaperCraft AI',
+        name: 'Paptrix',
         email: process.env.SMTP_USER, // your Brevo login email
       },
       to: [{ email: to }],
@@ -53,7 +53,7 @@ const templates: Record<string, (data: Record<string, string>) => string> = {
   welcome: (d) => `
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#f9fafb;padding:2rem;border-radius:12px">
       <div style="background:linear-gradient(135deg,#2563eb,#0891b2);padding:2rem;border-radius:8px;text-align:center;margin-bottom:1.5rem">
-        <h1 style="color:#fff;margin:0;font-size:1.5rem">Welcome to PaperCraft AI! 🎉</h1>
+        <h1 style="color:#fff;margin:0;font-size:1.5rem">Welcome to Paptrix! 🎉</h1>
       </div>
       <p style="color:#374151">Hi <strong>${d.name}</strong>,</p>
       <p style="color:#374151">You're all set to create professional question papers in seconds.</p>

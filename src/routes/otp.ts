@@ -38,12 +38,12 @@ router.post('/send', asyncHandler(async (req: Request, res: Response) => {
 
   try {
     await getTransporter().sendMail({
-      from: `"PaperCraft AI" <${process.env.SMTP_USER}>`,
+      from: `"Paptrix" <${process.env.SMTP_USER}>`,
       to: email,
-      subject: 'Your PaperCraft AI Verification Code',
+      subject: 'Your Paptrix Verification Code',
       html: `
         <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px">
-          <h1 style="color:#2563eb;text-align:center">📋 PaperCraft AI</h1>
+          <h1 style="color:#2563eb;text-align:center">📋 Paptrix</h1>
           <div style="background:#f8fafc;border-radius:12px;padding:24px;text-align:center">
             <h2>Verify your email</h2>
             <p style="color:#64748b">Your verification code:</p>
@@ -143,12 +143,12 @@ router.post('/resend', asyncHandler(async (req: Request, res: Response) => {
 
   try {
     await getTransporter().sendMail({
-      from: `"PaperCraft AI" <${process.env.SMTP_USER}>`,
+      from: `"Paptrix" <${process.env.SMTP_USER}>`,
       to: email,
-      subject: 'Your New PaperCraft AI Verification Code',
+      subject: 'Your New P Verification Code',
       html: `
         <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px">
-          <h1 style="color:#2563eb;text-align:center">📋 PaperCraft AI</h1>
+          <h1 style="color:#2563eb;text-align:center">📋 paptrix</h1>
           <div style="background:#f8fafc;border-radius:12px;padding:24px;text-align:center">
             <h2>New Verification Code</h2>
             <p style="color:#64748b">Your new OTP is:</p>

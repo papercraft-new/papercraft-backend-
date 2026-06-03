@@ -91,12 +91,12 @@ router.post(
     // Send OTP email
     try {
       await getTransporter().sendMail({
-        from: `"PaperCraft AI" <${process.env.SMTP_USER}>`,
+        from: `"Paptrix" <${process.env.SMTP_USER}>`,
         to: email,
-        subject: 'Verify your PaperCraft AI account',
+        subject: 'Verify your Paptrix account',
         html: `
           <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px">
-            <h1 style="color:#2563eb;text-align:center">📋 PaperCraft AI</h1>
+            <h1 style="color:#2563eb;text-align:center">📋 Paptrix</h1>
             <div style="background:#f8fafc;border-radius:12px;padding:24px;text-align:center">
               <h2>Welcome ${name}! Verify your email</h2>
               <p style="color:#64748b">Your verification code:</p>
@@ -346,7 +346,7 @@ router.post(
     try {
       await sendEmail({
         to: email,
-        subject: 'Reset Your PaperCraft AI Password',
+        subject: 'Reset Your Paptrix Password',
         template: 'password-reset',
         data: {
           name: user.name || 'there',
