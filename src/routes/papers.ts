@@ -196,16 +196,25 @@ router.put(
 
     const { title, examDetails, sections, templateId, tags, status } = req.body;
 
-    // Save version snapshot before updating
-    await prisma.paperVersion.create({
-      data: {
-        paperId: id,
-        version: existing.version,
-        sections: existing.sections as object,
-        examDetails: existing.examDetails as object,
-        createdBy: userId,
-      },
-    });
+    // Save version snapshot — skip silently if this version already exists
+    try {
+      const versionExists = await prisma.paperVersion.findFirst({
+        where: { paperId: id, version: existing.version },
+      });
+      if (!versionExists) {
+        await prisma.paperVersion.create({
+          data: {
+            paperId: id,
+            version: existing.version,
+            sections: existing.sections as object,
+            examDetails: existing.examDetails as object,
+            createdBy: userId,
+          },
+        });
+      }
+    } catch {
+      // Version snapshot is non-critical — never block the actual save
+    }
 
     const totalMarks = sections
       ? sections.reduce((sum: number, s: { totalMarks?: number; questions?: Array<{ marks?: number }> }) => {
@@ -251,6 +260,13 @@ router.delete(
     if (!paper) {
       return res.status(404).json({ success: false, error: 'Paper not found' });
     }
+
+    // Resolve templateKey: body > examDetails._templateId > 'school'
+    const rawKey: string =
+      req.body.templateKey ||
+      ((paper.examDetails as Record<string, unknown>)?._templateId as string) ||
+      'school';
+    const templateKey = rawKey; // keep tpl_ prefix - docxService uses tpl_ keys
 
     await prisma.paper.update({ where: { id }, data: { status: 'ARCHIVED' } });
 
@@ -301,12 +317,17 @@ router.post(
   asyncHandler(async (req: Request, res: Response) => {
     const userId = (req as any).user.userId;
     const { id } = req.params;
-    const { templateKey = 'school' } = req.body;
-
     const paper = await prisma.paper.findFirst({ where: { id, userId } });
     if (!paper) {
       return res.status(404).json({ success: false, error: 'Paper not found' });
     }
+
+    // Resolve templateKey: body > examDetails._templateId > 'school'
+    const rawKey: string =
+      req.body.templateKey ||
+      ((paper.examDetails as Record<string, unknown>)?._templateId as string) ||
+      'school';
+    const templateKey = rawKey; // keep tpl_ prefix - docxService uses tpl_ keys
 const paperData: PaperData = {
   id: paper.id,
   title: paper.title,
@@ -365,6 +386,13 @@ router.get(
     if (!paper) {
       return res.status(404).json({ success: false, error: 'Paper not found' });
     }
+
+    // Resolve templateKey: body > examDetails._templateId > 'school'
+    const rawKey: string =
+      req.body.templateKey ||
+      ((paper.examDetails as Record<string, unknown>)?._templateId as string) ||
+      'school';
+    const templateKey = rawKey; // keep tpl_ prefix - docxService uses tpl_ keys
 
     const versions = await prisma.paperVersion.findMany({
       where: { paperId: id },

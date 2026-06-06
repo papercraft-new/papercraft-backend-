@@ -27,7 +27,7 @@ import { logger } from '../utils/logger';
 // ─────────────────────────────────────────
 
 const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
-  school: {
+  'tpl_school': {
     fontFamily: 'Times New Roman',
     titleFontSize: 16,
     bodyFontSize: 12,
@@ -40,7 +40,7 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
     showSignatureBlock: true,
     headerLayout: 'centered',
   },
-  college: {
+  'tpl_college': {
     fontFamily: 'Arial',
     titleFontSize: 14,
     bodyFontSize: 11,
@@ -65,7 +65,7 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
     showSignatureBlock: true,
     headerLayout: 'centered',
   },
-  coaching: {
+  'tpl_coaching': {
     fontFamily: 'Arial',
     titleFontSize: 15,
     bodyFontSize: 12,
@@ -76,7 +76,7 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
     showLogo: true,
     showSignatureBlock: true,
   },
-  competitive: {
+  'tpl_competitive': {
     fontFamily: 'Times New Roman',
     titleFontSize: 13,
     bodyFontSize: 11,
@@ -86,7 +86,7 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
     showLogo: false,
     showSignatureBlock: false,
   },
-  luxury: {
+  'tpl_luxury': {
     fontFamily: 'Palatino Linotype',
     titleFontSize: 16,
     bodyFontSize: 12,
@@ -96,6 +96,21 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
     showLogo: true,
     showSignatureBlock: true,
     headerLayout: 'centered',
+  },
+  // ── CLASSIC TEMPLATE ────────────────────
+  // Minimal top header (name, class, date, marks only) + MCQ all 4 in one line
+  'tpl_classic': {
+    fontFamily: 'Times New Roman',
+    titleFontSize: 14,
+    bodyFontSize: 11,
+    questionFontSize: 11,
+    primaryColor: '111827',
+    outerBorderStyle: 'none',
+    outerBorderWidth: 0,
+    innerBorderStyle: 'none',
+    showLogo: false,
+    showSignatureBlock: false,
+    headerLayout: 'classic-minimal',
   },
 };
 
@@ -112,77 +127,13 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
 
   const children: (Paragraph | Table)[] = [];
 
+  const isClassic = templateKey === 'tpl_classic';
   const primaryHex = config.primaryColor || '1A2E5A';
   const font = config.fontFamily || 'Times New Roman';
   const titleSize = (config.titleFontSize || 16) * 2;
   const bodySize = (config.bodyFontSize || 12) * 2;
   const qSize = (config.questionFontSize || 11) * 2;
 
-  // ── INSTITUTION NAME ──────────────────────
-  children.push(
-    new Paragraph({
-      alignment: AlignmentType.CENTER,
-      spacing: { after: 60 },
-      children: [
-        new TextRun({
-          text: (examDetails.institutionName || 'INSTITUTION NAME').toUpperCase(),
-          bold: true,
-          size: titleSize + 4,
-          font,
-          color: primaryHex,
-        }),
-      ],
-    })
-  );
-
-  // Institution Address
-  if (examDetails.institutionAddress) {
-    children.push(
-      new Paragraph({
-        alignment: AlignmentType.CENTER,
-        spacing: { after: 40 },
-        children: [
-          new TextRun({
-            text: examDetails.institutionAddress,
-            size: bodySize - 4,
-            font,
-            color: '666666',
-          }),
-        ],
-      })
-    );
-  }
-
-  // Department
-  if (examDetails.department) {
-    children.push(
-      new Paragraph({
-        alignment: AlignmentType.CENTER,
-        spacing: { after: 60 },
-        children: [
-          new TextRun({
-            text: `Department of ${examDetails.department}`,
-            size: bodySize - 4,
-            font,
-            color: '444444',
-          }),
-        ],
-      })
-    );
-  }
-
-  // ── THICK BORDER LINE ─────────────────────
-  children.push(
-    new Paragraph({
-      spacing: { before: 40, after: 80 },
-      border: {
-        bottom: { style: BorderStyle.DOUBLE, size: 6, color: primaryHex },
-      },
-      children: [new TextRun({ text: '' })],
-    })
-  );
-
-  // ── META INFO TABLE ───────────────────────
   const dateStr = examDetails.date
     ? new Date(examDetails.date).toLocaleDateString('en-IN', {
         day: '2-digit',
@@ -191,57 +142,148 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
       })
     : '—';
 
-  const metaRows = [
-    [
-      `Subject: ${examDetails.subject || '—'}${examDetails.subjectCode ? ` (${examDetails.subjectCode})` : ''}`,
-      `Date: ${dateStr}`,
-    ],
-    [
-      `Class: ${examDetails.class || '—'}${examDetails.branch ? ` | ${examDetails.branch}` : ''}`,
-      `Duration: ${examDetails.duration || '3 Hours'}`,
-    ],
-    [
-      `Exam Type: ${examDetails.examType || '—'}`,
-      `Max. Marks: ${totalMarks || examDetails.totalMarks || '—'}`,
-    ],
-  ];
+  if (isClassic) {
+    // ── CLASSIC HEADER: institution name → divider → meta row → divider ──
+    const classicPageWidth = convertInchesToTwip(8.27 - 1.25 - 1.25);
 
-  
-
-  const metaTable = new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    layout: TableLayoutType.FIXED,
-    rows: metaRows.map(row =>
-      new TableRow({
-        children: row.map((cell, idx) =>
-          new TableCell({
-            width: { size: 50, type: WidthType.PERCENTAGE },
-            borders: {
-              top: { style: BorderStyle.NONE },
-              bottom: { style: BorderStyle.NONE },
-              left: { style: BorderStyle.NONE },
-              right: { style: BorderStyle.NONE },
-            },
-            children: [
-              new Paragraph({
-                alignment: idx === 1 ? AlignmentType.RIGHT : AlignmentType.LEFT,
-                children: [
-                  new TextRun({
-                    text: cell,
-                    size: bodySize - 2,
-                    font,
-                    bold: cell.startsWith('Max') || cell.startsWith('Date'),
-                  }),
-                ],
-              }),
-            ],
-          })
-        ),
+    // Institution name (centered, bold, uppercase)
+    children.push(
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing: { before: 0, after: 60 },
+        children: [
+          new TextRun({
+            text: (examDetails.institutionName || 'INSTITUTION NAME').toUpperCase(),
+            bold: true,
+            size: titleSize,
+            font,
+            color: '111827',
+          }),
+        ],
       })
-    ),
-  });
+    );
+    children.push(makeDivider(BorderStyle.SINGLE, '888888', 2));
 
-  children.push(metaTable);
+    // Meta row: Name / Class / Date / Marks in one line via tab stops
+    const q1 = Math.floor(classicPageWidth / 4);
+    children.push(
+      new Paragraph({
+        spacing: { before: 60, after: 60 },
+        tabStops: [
+          { type: 'left', position: q1 },
+          { type: 'left', position: q1 * 2 },
+          { type: 'right', position: classicPageWidth },
+        ],
+        children: [
+          new TextRun({ text: 'Name: ___________________', size: bodySize - 2, font }),
+          new TextRun({ text: `	Class: ${examDetails.class || '—'}`, size: bodySize - 2, font }),
+          new TextRun({ text: `	Date: ${dateStr}`, size: bodySize - 2, font }),
+          new TextRun({ text: `	Max. Marks: ${totalMarks || examDetails.totalMarks || '—'}`, size: bodySize - 2, font, bold: true }),
+        ],
+      })
+    );
+    children.push(makeDivider(BorderStyle.SINGLE, '888888', 2));
+  } else {
+    // ── DEFAULT HEADER ────────────────────────
+    // Institution Name
+    children.push(
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing: { after: 60 },
+        children: [
+          new TextRun({
+            text: (examDetails.institutionName || 'INSTITUTION NAME').toUpperCase(),
+            bold: true,
+            size: titleSize + 4,
+            font,
+            color: primaryHex,
+          }),
+        ],
+      })
+    );
+
+    // Institution Address
+    if (examDetails.institutionAddress) {
+      children.push(
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { after: 40 },
+          children: [
+            new TextRun({
+              text: examDetails.institutionAddress,
+              size: bodySize - 4,
+              font,
+              color: '666666',
+            }),
+          ],
+        })
+      );
+    }
+
+    // Department
+    if (examDetails.department) {
+      children.push(
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { after: 60 },
+          children: [
+            new TextRun({
+              text: `Department of ${examDetails.department}`,
+              size: bodySize - 4,
+              font,
+              color: '444444',
+            }),
+          ],
+        })
+      );
+    }
+
+    // Thick border line
+    children.push(
+      new Paragraph({
+        spacing: { before: 40, after: 80 },
+        border: {
+          bottom: { style: BorderStyle.DOUBLE, size: 6, color: primaryHex },
+        },
+        children: [new TextRun({ text: '' })],
+      })
+    );
+
+    // Meta info table
+    const metaRows = [
+      [
+        `Subject: ${examDetails.subject || '—'}${examDetails.subjectCode ? ` (${examDetails.subjectCode})` : ''}`,
+        `Date: ${dateStr}`,
+      ],
+      [
+        `Class: ${examDetails.class || '—'}${examDetails.branch ? ` | ${examDetails.branch}` : ''}`,
+        `Duration: ${examDetails.duration || '3 Hours'}`,
+      ],
+      [
+        `Exam Type: ${examDetails.examType || '—'}`,
+        `Max. Marks: ${totalMarks || examDetails.totalMarks || '—'}`,
+      ],
+    ];
+
+    if (examDetails.academicYear) {
+      metaRows.push([`Academic Year: ${examDetails.academicYear}`, examDetails.facultyName ? `Faculty: ${examDetails.facultyName}` : '']);
+    }
+
+    // Meta rows as plain paragraphs — left label, right value via tab stop
+    const metaPageWidth = convertInchesToTwip(8.27 - 1.25 - 1.25);
+    metaRows.forEach(row => {
+      children.push(
+        new Paragraph({
+          spacing: { before: 20, after: 20 },
+          tabStops: [{ type: 'right', position: metaPageWidth }],
+          children: [
+            new TextRun({ text: row[0], size: bodySize - 2, font }),
+            new TextRun({ text: `	${row[1]}`, size: bodySize - 2, font, bold: true }),
+          ],
+        })
+      );
+    });
+  }
 
   // ── THIN DIVIDER ──────────────────────────
   children.push(makeDivider(BorderStyle.SINGLE, primaryHex, 2));
@@ -363,171 +405,74 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
 
     // Questions
     section.questions.forEach((question) => {
-      // Fix options if needed
       const { cleanedText, fixedOptions } = getCleanedQuestion(question);
 
-      // Question text row with marks on right
-      const questionTable = new Table({
-        width: { size: 100, type: WidthType.PERCENTAGE },
-        layout: TableLayoutType.FIXED,
-        rows: [
-          new TableRow({
-            children: [
-              // Number cell
-              new TableCell({
-                width: { size: 5, type: WidthType.PERCENTAGE },
-                borders: noBorders(),
+      // ── QUESTION ROW: plain paragraph with hanging indent ──
+      // Number + text on left, marks right-aligned via tab stop
+      const pageWidthTwip = convertInchesToTwip(8.27 - 1.25 - 1.25); // A4 minus margins
+      children.push(
+        new Paragraph({
+          spacing: { before: 120, after: 60 },
+          indent: { left: convertInchesToTwip(0.35), hanging: convertInchesToTwip(0.35) },
+          tabStops: [{ type: 'right', position: pageWidthTwip }],
+          children: [
+            new TextRun({ text: `${question.number}.  `, bold: true, size: qSize, font }),
+            new TextRun({ text: cleanedText, size: qSize, font }),
+          ],
+        })
+      );
+
+      // ── MCQ OPTIONS ──
+      if (question.type === 'MCQ' && fixedOptions.length > 0) {
+        const opts =
+          fixedOptions.length >= 4
+            ? fixedOptions
+            : [...fixedOptions, ...Array(4 - fixedOptions.length).fill({ label: '?', text: '___', isCorrect: false })];
+
+        if (isClassic) {
+          // Classic: all 4 in one line via tabs
+          const colWidth = Math.floor(pageWidthTwip / 4);
+          children.push(
+            new Paragraph({
+              spacing: { before: 40, after: 80 },
+              indent: { left: convertInchesToTwip(0.5) },
+              tabStops: [
+                { type: 'left', position: colWidth },
+                { type: 'left', position: colWidth * 2 },
+                { type: 'left', position: colWidth * 3 },
+              ],
+              children: opts.slice(0, 4).flatMap((opt, i) => [
+                ...(i > 0 ? [new TextRun({ text: '	', size: qSize - 2, font })] : []),
+                new TextRun({ text: `(${opt.label}) `, bold: true, size: qSize - 2, font, color: '222222' }),
+                new TextRun({ text: opt.text || '___', size: qSize - 2, font }),
+              ]),
+            })
+          );
+        } else {
+          // Default: 2x2 — two options per line via tab
+          const halfWidth = Math.floor(pageWidthTwip / 2);
+          for (let i = 0; i < opts.length; i += 2) {
+            const a = opts[i];
+            const b = opts[i + 1];
+            children.push(
+              new Paragraph({
+                spacing: { before: 40, after: b ? 0 : 80 },
+                indent: { left: convertInchesToTwip(0.5) },
+                tabStops: [{ type: 'left', position: halfWidth }],
                 children: [
-                  new Paragraph({
-                    children: [
-                      new TextRun({
-                        text: `${question.number}.`,
-                        bold: true,
-                        size: qSize,
-                        font,
-                      }),
-                    ],
-                  }),
+                  new TextRun({ text: `(${a.label}) `, bold: true, size: qSize - 2, font, color: '222222' }),
+                  new TextRun({ text: a.text || '___', size: qSize - 2, font }),
+                  ...(b ? [
+                    new TextRun({ text: '	', size: qSize - 2, font }),
+                    new TextRun({ text: `(${b.label}) `, bold: true, size: qSize - 2, font, color: '222222' }),
+                    new TextRun({ text: b.text || '___', size: qSize - 2, font }),
+                  ] : []),
                 ],
-              }),
-              // Question text cell
-              new TableCell({
-                width: { size: 88, type: WidthType.PERCENTAGE },
-                borders: noBorders(),
-                children: [
-                  new Paragraph({
-                    children: [
-                      new TextRun({
-                        text: cleanedText,
-                        size: qSize,
-                        font,
-                      }),
-                    ],
-                  }),
-                ],
-              }),
-              // Marks cell
-              new TableCell({
-                width: { size: 7, type: WidthType.PERCENTAGE },
-                borders: noBorders(),
-                children: [
-                  new Paragraph({
-                    alignment: AlignmentType.RIGHT,
-                    children: [
-                      new TextRun({
-                        text: `[${question.marks}]`,
-                        bold: true,
-                        size: qSize - 2,
-                        font,
-                        color: primaryHex,
-                      }),
-                    ],
-                  }),
-                ],
-              }),
-            ],
-          }),
-        ],
-      });
-
-      children.push(questionTable);
-
-      // MCQ Options in 2x2 grid
-if (question.type === 'MCQ' && fixedOptions.length > 0) {
-  const opts =
-    fixedOptions.length >= 4
-      ? fixedOptions
-      : [
-          ...fixedOptions,
-          ...Array(4 - fixedOptions.length).fill({ label: '?', text: '___', isCorrect: false }),
-        ];
-
-  const optionRows = [];
-
-  for (let i = 0; i < opts.length; i += 2) {
-    const rowOpts = opts.slice(i, i + 2);
-
-    while (rowOpts.length < 2) {
-      rowOpts.push({ label: '', text: '', isCorrect: false });
-    }
-
-    optionRows.push(
-      new TableRow({
-        children: rowOpts.map(opt =>
-          new TableCell({
-            width: { size: 50, type: WidthType.PERCENTAGE },
-            borders: noBorders(),
-            margins: {
-              top: 40,
-              bottom: 40,
-              left: 60,
-              right: 60,
-            },
-            children: [
-              new Table({
-                width: { size: 100, type: WidthType.PERCENTAGE },
-                layout: TableLayoutType.FIXED,
-                rows: [
-                  new TableRow({
-                    children: [
-                      new TableCell({
-                        width: { size: 12, type: WidthType.PERCENTAGE },
-                        borders: noBorders(),
-                        children: [
-                          new Paragraph({
-                            alignment: AlignmentType.LEFT,
-                            spacing: { before: 0, after: 0 },
-                            children: [
-                              new TextRun({
-                                text: opt.label ? `(${opt.label})` : '',
-                                bold: true,
-                                size: qSize - 2,
-                                font,
-                                color: '222222',
-                              }),
-                            ],
-                          }),
-                        ],
-                      }),
-                      new TableCell({
-                        width: { size: 88, type: WidthType.PERCENTAGE },
-                        borders: noBorders(),
-                        children: [
-                          new Paragraph({
-                            alignment: AlignmentType.LEFT,
-                            spacing: { before: 0, after: 0 },
-                            children: [
-                              new TextRun({
-                                text: opt.text || '_______________',
-                                size: qSize - 2,
-                                font,
-                              }),
-                            ],
-                          }),
-                        ],
-                      }),
-                    ],
-                  }),
-                ],
-              }),
-            ],
-          })
-        ),
-      })
-    );
-  }
-
-  const optTable = new Table({
-    width: { size: 90, type: WidthType.PERCENTAGE },
-    layout: TableLayoutType.FIXED,
-    rows: optionRows,
-    margins: {
-      left: convertInchesToTwip(0.3),
-    },
-  });
-
-  children.push(optTable);
-}
+              })
+            );
+          }
+        }
+      }
       // True/False options
       if (question.type === 'TRUE_FALSE') {
         children.push(
@@ -569,46 +514,52 @@ if (question.type === 'MCQ' && fixedOptions.length > 0) {
     });
   });
 
-  // ── SIGNATURE BLOCK ───────────────────────
-  children.push(makeDivider(BorderStyle.DOUBLE, primaryHex, 4));
+  // ── SIGNATURE BLOCK (default only) — no tables, pure paragraphs ──
+  if (!isClassic) {
+    children.push(makeDivider(BorderStyle.DOUBLE, primaryHex, 4));
 
-  const signatureTable = new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    layout: TableLayoutType.FIXED,
-    rows: [
-      new TableRow({
-        children: ['Subject Teacher', 'HOD / Principal', 'Exam Controller'].map(label =>
-          new TableCell({
-            width: { size: 33, type: WidthType.PERCENTAGE },
-            borders: noBorders(),
-            children: [
-              new Paragraph({
-                alignment: AlignmentType.CENTER,
-                spacing: { before: 600, after: 60 },
-                border: {
-                  bottom: { style: BorderStyle.SINGLE, size: 4, color: '333333' },
-                },
-                children: [new TextRun({ text: ' ', size: bodySize, font })],
-              }),
-              new Paragraph({
-                alignment: AlignmentType.CENTER,
-                children: [
-                  new TextRun({
-                    text: label,
-                    size: bodySize - 4,
-                    font,
-                    color: '555555',
-                  }),
-                ],
-              }),
-            ],
-          })
-        ),
-      }),
-    ],
-  });
+    // Spacing paragraph
+    children.push(new Paragraph({ spacing: { before: 400, after: 0 }, children: [new TextRun({ text: '' })] }));
 
-  children.push(signatureTable);
+    const pageWidthTwip = convertInchesToTwip(8.27 - 1.25 - 1.25);
+    const third = Math.floor(pageWidthTwip / 3);
+    const twoThird = third * 2;
+
+    // Signature lines paragraph — three underlines via tab stops
+    children.push(
+      new Paragraph({
+        spacing: { before: 0, after: 60 },
+        tabStops: [
+          { type: 'center', position: third },
+          { type: 'center', position: twoThird },
+          { type: 'right', position: pageWidthTwip },
+        ],
+        border: { bottom: { style: BorderStyle.NONE } },
+        children: [
+          new TextRun({ text: '_____________________', size: bodySize, font, color: 'AAAAAA' }),
+          new TextRun({ text: '	_____________________', size: bodySize, font, color: 'AAAAAA' }),
+          new TextRun({ text: '	_____________________', size: bodySize, font, color: 'AAAAAA' }),
+        ],
+      })
+    );
+
+    // Labels paragraph
+    children.push(
+      new Paragraph({
+        spacing: { before: 40, after: 0 },
+        tabStops: [
+          { type: 'center', position: third },
+          { type: 'center', position: twoThird },
+          { type: 'right', position: pageWidthTwip },
+        ],
+        children: [
+          new TextRun({ text: 'Subject Teacher', size: bodySize - 4, font, color: '555555' }),
+          new TextRun({ text: '	HOD / Principal', size: bodySize - 4, font, color: '555555' }),
+          new TextRun({ text: '	Exam Controller', size: bodySize - 4, font, color: '555555' }),
+        ],
+      })
+    );
+  }
 
   // ── BUILD DOCUMENT ────────────────────────
   const doc = new Document({
@@ -622,36 +573,38 @@ if (question.type === 'MCQ' && fixedOptions.length > 0) {
       left: convertInchesToTwip(1.25),
       right: convertInchesToTwip(1.25),
     },
-    borders: {
-      pageBorders: {
-        display: PageBorderDisplay.ALL_PAGES,
-        offsetFrom: PageBorderOffsetFrom.TEXT,
+    ...(isClassic ? {} : {
+      borders: {
+        pageBorders: {
+          display: PageBorderDisplay.ALL_PAGES,
+          offsetFrom: PageBorderOffsetFrom.TEXT,
+        },
+        pageBorderTop: {
+          style: BorderStyle.DOUBLE,
+          size: 12,
+          color: primaryHex,
+          space: 36,
+        },
+        pageBorderBottom: {
+          style: BorderStyle.DOUBLE,
+          size: 12,
+          color: primaryHex,
+          space: 36,
+        },
+        pageBorderLeft: {
+          style: BorderStyle.DOUBLE,
+          size: 12,
+          color: primaryHex,
+          space: 24,
+        },
+        pageBorderRight: {
+          style: BorderStyle.DOUBLE,
+          size: 12,
+          color: primaryHex,
+          space: 24,
+        },
       },
-      pageBorderTop: {
-        style: BorderStyle.DOUBLE,
-        size: 12,
-        color: primaryHex,
-        space: 36,
-      },
-      pageBorderBottom: {
-        style: BorderStyle.DOUBLE,
-        size: 12,
-        color: primaryHex,
-        space: 36,
-      },
-      pageBorderLeft: {
-        style: BorderStyle.DOUBLE,
-        size: 12,
-        color: primaryHex,
-        space: 24,
-      },
-      pageBorderRight: {
-        style: BorderStyle.DOUBLE,
-        size: 12,
-        color: primaryHex,
-        space: 24,
-      },
-    },
+    }),
   },
 },
         headers: {
