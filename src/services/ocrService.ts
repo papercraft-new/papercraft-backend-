@@ -31,7 +31,7 @@ export async function processOcrJob(
   } else if (inputType === 'image') {
     rawText = await extractTextFromImage(content);
   } else if (inputType === 'pdf') {
-    rawText = await extractTextFromImage(content);
+    rawText = await extractTextFromPdf(content);
   }
 
   if (!rawText || rawText.trim().length < 5) {
@@ -58,6 +58,110 @@ export async function processOcrJob(
     processingMs,
     warnings,
   };
+}
+
+// ─────────────────────────────────────────
+// EXTRACT TEXT FROM PDF (Claude native PDF support)
+// ─────────────────────────────────────────
+async function extractTextFromPdf(pdfUrl: string): Promise<string> {
+  logger.info('Starting PDF text extraction...');
+
+  // Download the PDF
+  const response = await fetch(pdfUrl, {
+    headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/pdf,*/*' },
+  });
+  if (!response.ok) throw new Error(`Failed to download PDF: ${response.status}`);
+
+  const arrayBuffer = await response.arrayBuffer();
+  const base64Pdf = Buffer.from(arrayBuffer).toString('base64');
+  logger.info(`PDF downloaded: ${base64Pdf.length} base64 chars`);
+
+  // Strategy 1: Claude native PDF document support
+  if (process.env.ANTHROPIC_API_KEY) {
+    try {
+      logger.info('Trying Claude native PDF extraction...');
+      const claudeResponse = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.ANTHROPIC_API_KEY!,
+          'anthropic-version': '2023-06-01',
+          'anthropic-beta': 'pdfs-2024-09-25,output-128k-2025-02-19',
+        },
+        body: JSON.stringify({
+          model: 'claude-opus-4-7',
+          max_tokens: 8000,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'document',
+                  source: {
+                    type: 'base64',
+                    media_type: 'application/pdf',
+                    data: base64Pdf,
+                  },
+                },
+                {
+                  type: 'text',
+                  text: `Extract ALL text from this exam question paper PDF exactly as written.
+
+Rules:
+- Extract every single question with its number
+- Extract ALL option labels exactly: (a), (b), (c), (d) or (1),(2),(3),(4)
+- Extract section headers: SECTION A, PART I, etc.
+- Extract marks shown: [2] or (3 marks)
+- Extract mathematical equations and symbols
+- Keep the exact order and structure across all pages
+- Do NOT summarize, skip or modify anything
+- Do NOT add any explanation
+
+Return ONLY the raw extracted text, nothing else.`,
+                },
+              ],
+            },
+          ],
+        }),
+      });
+
+      if (claudeResponse.ok) {
+        const data = await claudeResponse.json() as {
+          content: Array<{ type: string; text: string }>;
+          error?: { message: string };
+        };
+        const text = data.content?.[0]?.text || '';
+        if (text && text.trim().length > 20) {
+          logger.info(`Claude PDF extraction succeeded: ${text.length} chars`);
+          return text;
+        }
+      } else {
+        const err = await claudeResponse.text();
+        logger.warn(`Claude PDF extraction failed: ${claudeResponse.status} ${err}`);
+      }
+    } catch (err) {
+      logger.warn('Claude PDF extraction threw error:', err);
+    }
+  }
+
+  // Strategy 2: Extract pages as images and run image OCR
+  logger.info('Falling back to page-by-page image OCR...');
+  try {
+    // Use pdfjs-dist to render pages if available, else try pdf2pic
+    const pdfParse = await import('pdf-parse').catch(() => null);
+    if (pdfParse) {
+      const pdfBuffer = Buffer.from(arrayBuffer);
+      const data = await pdfParse.default(pdfBuffer);
+      if (data.text && data.text.trim().length > 20) {
+        logger.info(`pdf-parse extracted: ${data.text.length} chars`);
+        return data.text;
+      }
+    }
+  } catch (err) {
+    logger.warn('pdf-parse fallback failed:', err);
+  }
+
+  throw new Error('Could not extract text from PDF. Please convert to image first or paste text manually.');
 }
 
 // ─────────────────────────────────────────
