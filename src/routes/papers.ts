@@ -146,13 +146,18 @@ router.post(
       0
     );
 
+    // Store templateId inside examDetails (not as FK) to avoid constraint errors
+    const examDetailsWithTemplate = {
+      ...(examDetails as object),
+      ...(templateId !== undefined ? { _templateId: templateId } : {}),
+    };
+
     const paper = await prisma.paper.create({
       data: {
         userId,
         title,
-        examDetails,
+        examDetails: examDetailsWithTemplate,
         sections,
-        templateId,
         tags: tags || [],
         totalMarks,
         questionCount,
