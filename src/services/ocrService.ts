@@ -89,7 +89,7 @@ async function extractTextFromPdf(pdfUrl: string): Promise<string> {
           'anthropic-beta': 'pdfs-2024-09-25,output-128k-2025-02-19',
         },
         body: JSON.stringify({
-          model: 'claude-opus-4-7',
+          model: 'claude-sonnet-4-6',
           max_tokens: 8000,
           messages: [
             {
@@ -588,7 +588,7 @@ async function extractWithClaude(imageUrl: string): Promise<string> {
       'anthropic-beta': 'output-128k-2025-02-19',
     },
     body: JSON.stringify({
-      model: 'claude-opus-4-7',
+      model: 'claude-sonnet-4-6',
       max_tokens: 8000,
       messages: [
         {
@@ -656,7 +656,7 @@ async function structureWithClaude(
       'anthropic-beta': 'output-128k-2025-02-19',
     },
     body: JSON.stringify({
-      model: 'claude-opus-4-7',
+      model: 'claude-haiku-4-5',
       max_tokens: 8000,
       system: 'You are an expert Indian exam question paper parser. Always respond with valid JSON only. No markdown. No explanation.',
       messages: [

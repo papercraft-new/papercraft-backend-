@@ -1,4 +1,3 @@
-
 import { Router, Request, Response } from 'express';
 import { body, validationResult } from 'express-validator';
 import { rateLimit } from 'express-rate-limit';
@@ -14,53 +13,53 @@ router.use(authenticate);
 const aiLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 100 });
 
 // ─────────────────────────────────────────
-// MISTRAL API HELPER
+// CLAUDE SONNET HELPER (chat, generate, analyze, bloom)
 // ─────────────────────────────────────────
 
-async function callMistral(
+async function callClaude(
   systemPrompt: string,
   messages: Array<{ role: 'user' | 'assistant'; content: string }>,
   maxTokens = 2000,
   temperature = 0.7
 ): Promise<string> {
-  if (!process.env.MISTRAL_API_KEY) {
-    throw new Error('Mistral API key not configured. Please add MISTRAL_API_KEY to .env');
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new Error('Anthropic API key not configured.');
   }
 
-  const response = await fetch('https://api.mistral.ai/v1/chat/completions', {
+  logger.info('Calling Claude Sonnet API...');
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${process.env.MISTRAL_API_KEY}`,
+      'x-api-key': process.env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: 'mistral-small-latest',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        ...messages,
-      ],
+      model: 'claude-sonnet-4-6',
       max_tokens: maxTokens,
       temperature,
+      system: systemPrompt,
+      messages,
     }),
   });
 
   if (!response.ok) {
     const errText = await response.text();
-    logger.error('Mistral API error:', errText);
-    throw new Error(`Mistral API error: ${response.status}`);
+    logger.error(`Claude API error ${response.status}:`, errText);
+    throw new Error(`Claude API error ${response.status}: ${errText.substring(0, 200)}`);
   }
 
   const data = await response.json() as {
-    choices: Array<{ message: { content: string } }>;
+    content: Array<{ type: string; text: string }>;
     error?: { message: string };
   };
 
   if (data.error) throw new Error(data.error.message);
 
-  const text = data.choices?.[0]?.message?.content || '';
-  if (!text) throw new Error('Mistral returned empty response');
+  const text = data.content?.[0]?.text || '';
+  if (!text) throw new Error('Claude returned empty response');
 
-  logger.info(`Mistral response: ${text.length} chars`);
+  logger.info(`Claude response: ${text.length} chars`);
   return text;
 }
 
@@ -86,64 +85,58 @@ router.post(
     const userId = (req as any).user.userId;
     const { message, history = [], paperId } = req.body;
 
-    // Load paper context if provided
-    let paperContext = '';
-    if (paperId) {
-      const paper = await prisma.paper.findFirst({
-        where: { id: paperId, userId },
-        select: { title: true, examDetails: true, sections: true, totalMarks: true },
-      });
-      if (paper) {
-        const ed = paper.examDetails as Record<string, unknown>;
-        paperContext = `
-Current paper context:
-- Title: ${paper.title}
-- Subject: ${ed.subject}
-- Class: ${ed.class}
-- Total Marks: ${paper.totalMarks}
-`;
-      }
-    }
-
-    const systemPrompt = `You are PaperCraft AI, an expert educational assistant for Indian schools and colleges.
-
-You help teachers:
-- Generate new exam questions on any topic
-- Review question paper difficulty balance
-- Tag questions with Bloom's Taxonomy levels
-- Suggest marks allocation
-- Improve general instructions
-- Format question papers professionally
-
-Supported boards: CBSE, ICSE, State Boards, JEE, NEET, UPSC
-${paperContext}
-
-Keep responses concise, practical and helpful.
-When generating questions, format them clearly with question number, text, and marks.`;
-
-    const messages = [
-      ...(history as Array<{ role: 'user' | 'assistant'; content: string }>).slice(-10),
-      { role: 'user' as const, content: message },
-    ];
-
     try {
-      const response = await callMistral(systemPrompt, messages, 2000, 0.7);
+      // Load paper context if provided
+      let paperContext = '';
+      if (paperId) {
+        try {
+          const paper = await prisma.paper.findFirst({
+            where: { id: paperId, userId },
+            select: { title: true, examDetails: true, totalMarks: true },
+          });
+          if (paper) {
+            const ed = (paper.examDetails as Record<string, unknown>) || {};
+            paperContext = 'Current paper: ' + paper.title + ', Subject: ' + (ed.subject || '-') + ', Class: ' + (ed.class || '-') + ', Marks: ' + (paper.totalMarks || '-');
+          }
+        } catch { /* paper context is optional */ }
+      }
 
-      await prisma.usageLog.create({
-        data: { userId, action: 'ai_chat', metadata: { paperId, messageLength: message.length } },
-      });
+      const sysLines = [
+        'You are Paptrix AI, an expert educational assistant for Indian schools and colleges.',
+        'You help teachers create and improve exam question papers.',
+        'You can: generate MCQ/short/long answer questions, analyze papers, suggest improvements, tag Bloom levels.',
+        'Supported boards: CBSE, ICSE, State Boards, JEE, NEET, UPSC.',
+        paperContext,
+        'Keep responses concise and practical. Format questions clearly with numbers and marks.',
+      ];
+      const systemPrompt = sysLines.filter(Boolean).join(' ');
+
+      const messages = [
+        ...(history as Array<{ role: 'user' | 'assistant'; content: string }>).slice(-10),
+        { role: 'user' as const, content: message },
+      ];
+
+      logger.info('Calling Claude for chat, message length: ' + message.length);
+      const response = await callClaude(systemPrompt, messages, 2000, 0.7);
+
+      try {
+        await prisma.usageLog.create({
+          data: { userId, action: 'ai_chat', metadata: { paperId, messageLength: message.length } },
+        });
+      } catch { /* non-critical */ }
 
       res.json({
         success: true,
-        data: { response },
+        data: { reply: response },
       });
 
     } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : 'AI service unavailable';
-      logger.error('AI chat error:', errMsg);
+      console.error('AI chat raw error:', err);
+      const errMsg = err instanceof Error ? (err.message || err.toString()) : String(err);
+      logger.error('AI chat error: ' + errMsg);
       res.status(500).json({
         success: false,
-        error: errMsg,
+        error: errMsg || 'AI service unavailable',
       });
     }
   })
@@ -204,7 +197,7 @@ Return ONLY a valid JSON array:
 ]`;
 
     try {
-      const response = await callMistral(
+      const response = await callClaude(
         systemPrompt,
         [{ role: 'user', content: prompt }],
         4000,
@@ -290,7 +283,7 @@ Return ONLY this JSON:
 }`;
 
     try {
-      const response = await callMistral(
+      const response = await callClaude(
         systemPrompt,
         [{ role: 'user', content: prompt }],
         1500,
@@ -346,7 +339,7 @@ Return ONLY this JSON array:
 ]`;
 
     try {
-      const response = await callMistral(
+      const response = await callClaude(
         systemPrompt,
         [{ role: 'user', content: prompt }],
         1000,
