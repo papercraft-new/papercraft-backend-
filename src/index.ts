@@ -6,6 +6,8 @@ import morgan from 'morgan';
 import { rateLimit } from 'express-rate-limit';
 import dotenv from 'dotenv';
 import { errorHandler } from './middleware/errorHandler';
+import { checkSubscription } from './middleware/checkSubscription';
+import * as cron from 'node-cron';
 import { logger } from './utils/logger';
 import { prisma } from './utils/prisma';
 
@@ -20,7 +22,8 @@ import paymentRoutes from './routes/payments';
 import adminRoutes from './routes/admin';
 import aiRoutes from './routes/ai';
 import otpRoutes from './routes/otp';
-import { verifyEmailTransporter } from './utils/email';
+
+// Add with other routes:
 
 
 dotenv.config();
@@ -103,6 +106,9 @@ app.get('/health', async (req, res) => {
 // API ROUTES
 // ─────────────────────────────────────────
 
+// Check + auto-expire subscriptions on every authenticated API call
+app.use('/api', checkSubscription);
+
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/papers', paperRoutes);
@@ -116,6 +122,18 @@ app.use('/api/otp', otpRoutes);
 // ─────────────────────────────────────────
 // ERROR HANDLING
 // ─────────────────────────────────────────
+
+// ── Monthly reset: reset papersUsedThisMonth on 1st of every month ──
+cron.schedule('0 0 1 * *', async () => {
+  try {
+    await prisma.subscription.updateMany({
+      data: { papersUsedThisMonth: 0 },
+    });
+    logger.info('Monthly paper usage reset done');
+  } catch (err) {
+    logger.error('Monthly reset failed:', err);
+  }
+}, { timezone: 'Asia/Kolkata' });
 
 app.use(errorHandler);
 
@@ -132,9 +150,6 @@ app.listen(PORT, () => {
   logger.info(`🚀 PaperCraft AI Server running on port ${PORT}`);
   logger.info(`📚 Environment: ${process.env.NODE_ENV}`);
   logger.info(`🌐 Frontend URL: ${process.env.FRONTEND_URL}`);
-
-  // Verify SMTP on startup so misconfiguration is caught immediately in Render logs
-  verifyEmailTransporter();
 });
 
 export default app;

@@ -145,7 +145,7 @@ router.post('/resend', asyncHandler(async (req: Request, res: Response) => {
     await getTransporter().sendMail({
       from: `"Paptrix" <${process.env.SMTP_USER}>`,
       to: email,
-      subject: 'Your New P Verification Code',
+      subject: 'Your New Paptrix Verification Code',
       html: `
         <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px">
           <h1 style="color:#2563eb;text-align:center">📋 paptrix</h1>
