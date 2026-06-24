@@ -3,6 +3,7 @@ import { authenticate } from '../middleware/authenticate';
 import { asyncHandler } from '../middleware/asyncHandler';
 import { prisma } from '../utils/prisma';
 import { logger } from '../utils/logger';
+import { markReferralPaid, clawbackReferralReward } from '../services/referralService';
 import crypto from 'crypto';
 
 const router = Router();
@@ -215,6 +216,16 @@ router.post('/verify', authenticate, asyncHandler(async (req: Request, res: Resp
 
   logger.info(`Payment verified: user ${userId} upgraded to ${plan.name}`);
 
+  // Referral hook — runs AFTER the user's own payment is fully processed.
+  // Wrapped so any referral issue can never affect the paying user's response.
+  if (plan.type === 'PRO' || plan.type === 'INSTITUTION') {
+    try {
+      await markReferralPaid(userId, plan.type, razorpayPaymentId);
+    } catch (err) {
+      logger.error('Referral hook failed (non-blocking):', err);
+    }
+  }
+
   res.json({
     success: true,
     data: {
@@ -284,6 +295,18 @@ router.post('/webhook', asyncHandler(async (req: Request, res: Response) => {
           where: { id: dbSub.id },
           data: { status: 'CANCELLED', cancelAtPeriodEnd: true },
         });
+      }
+    }
+  }
+
+  // Referral clawback — fires when a payment tied to a referral is refunded
+  if (event === 'refund.processed' || event === 'payment.refunded') {
+    const paymentId = req.body.payload?.payment?.entity?.id;
+    if (paymentId) {
+      try {
+        await clawbackReferralReward(paymentId);
+      } catch (err) {
+        logger.error('Referral clawback failed (non-blocking):', err);
       }
     }
   }

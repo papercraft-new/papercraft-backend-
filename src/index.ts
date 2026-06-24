@@ -7,6 +7,7 @@ import { rateLimit } from 'express-rate-limit';
 import dotenv from 'dotenv';
 import { errorHandler } from './middleware/errorHandler';
 import { checkSubscription } from './middleware/checkSubscription';
+import { expireStaleReferrals } from './services/referralService';
 import * as cron from 'node-cron';
 import { logger } from './utils/logger';
 import { prisma } from './utils/prisma';
@@ -22,6 +23,7 @@ import paymentRoutes from './routes/payments';
 import adminRoutes from './routes/admin';
 import aiRoutes from './routes/ai';
 import otpRoutes from './routes/otp';
+import referralRoutes from './routes/referrals';
 
 // Add with other routes:
 
@@ -119,6 +121,7 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/otp', otpRoutes); 
+app.use('/api/referrals', referralRoutes);
 // ─────────────────────────────────────────
 // ERROR HANDLING
 // ─────────────────────────────────────────
@@ -132,6 +135,15 @@ cron.schedule('0 0 1 * *', async () => {
     logger.info('Monthly paper usage reset done');
   } catch (err) {
     logger.error('Monthly reset failed:', err);
+  }
+}, { timezone: 'Asia/Kolkata' });
+
+// ── Daily: expire referrals that have sat PENDING past their 90-day window ──
+cron.schedule('0 1 * * *', async () => {
+  try {
+    await expireStaleReferrals();
+  } catch (err) {
+    logger.error('Referral expiry cron failed:', err);
   }
 }, { timezone: 'Asia/Kolkata' });
 

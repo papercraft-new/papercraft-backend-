@@ -110,6 +110,12 @@ model User {
   usageLogs     UsageLog[]
   payments      Payment[]
   sessions      Session[]
+
+  // Referral system
+  referredBy        String?   // userId of the referrer, set once at signup, immutable
+  referralsMade     Referral[] @relation("ReferralsMade")
+  referralReceived  Referral?  @relation("ReferralReceived")
+  referralRewards   ReferralReward[]
   passwordResets PasswordReset[]
   aiChats       AiChat[]
   teamMemberships TeamMember[]
@@ -410,4 +416,48 @@ model EmailOtp {
 
   @@map("email_otps")
   @@index([email])
+}
+// ─────────────────────────────────────────
+// REFERRAL SYSTEM
+// ─────────────────────────────────────────
+
+enum ReferralStatus {
+  PENDING    // friend signed up, hasn't paid yet
+  PAID       // friend paid, counts toward referrer's pair
+  REFUNDED   // friend's payment was refunded, clawed back
+  EXPIRED    // friend never paid within 90 days
+}
+
+model Referral {
+  id             String         @id @default(cuid())
+  referrerId     String
+  referredId     String         @unique // one referral record per referred user
+  referredEmail  String
+  status         ReferralStatus @default(PENDING)
+  planPurchased  PlanType?
+  paymentId      String?        @unique // Razorpay payment ID — idempotency + refund lookup
+  createdAt      DateTime       @default(now())
+  paidAt         DateTime?
+  expiresAt      DateTime       @default(dbgenerated("(now() + interval '90 days')"))
+
+  referrer User @relation("ReferralsMade", fields: [referrerId], references: [id], onDelete: Cascade)
+  referred User @relation("ReferralReceived", fields: [referredId], references: [id], onDelete: Cascade)
+
+  @@index([referrerId, status])
+  @@map("referrals")
+}
+
+model ReferralReward {
+  id            String    @id @default(cuid())
+  referrerId    String
+  referralIds   String[]  // the 2 referral IDs that triggered this specific reward
+  daysGranted   Int       @default(30)
+  tierAtGrant   PlanType
+  grantedAt     DateTime  @default(now())
+  reversedAt    DateTime? // set if clawed back due to a refund
+
+  referrer User @relation(fields: [referrerId], references: [id], onDelete: Cascade)
+
+  @@index([referrerId])
+  @@map("referral_rewards")
 }

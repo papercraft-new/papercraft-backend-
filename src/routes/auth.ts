@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { body, validationResult } from 'express-validator';
 import { rateLimit } from 'express-rate-limit';
+import { createPendingReferral } from '../services/referralService';
 import { prisma } from '../utils/prisma';
 import { sendEmail, getTransporter } from '../utils/email';
 import { logger } from '../utils/logger';
@@ -39,7 +40,7 @@ router.post(
       return res.status(400).json({ success: false, errors: errors.array() });
     }
 
-    const { email, password, name } = req.body;
+    const { email, password, name, ref } = req.body;
 
     const existingUser = await prisma.user.findUnique({ where: { email } });
     if (existingUser) {
@@ -48,11 +49,19 @@ router.post(
 
     const passwordHash = await bcrypt.hash(password, 12);
 
+    // Validate referrer exists before attaching — invalid/garbage ref codes are silently ignored
+    let referrerId: string | null = null;
+    if (ref && typeof ref === 'string') {
+      const referrer = await prisma.user.findUnique({ where: { id: ref }, select: { id: true } });
+      if (referrer) referrerId = referrer.id;
+    }
+
     const user = await prisma.user.create({
       data: {
         email,
         name,
         passwordHash,
+        ...(referrerId ? { referredBy: referrerId } : {}),
         subscription: {
           create: {
             planId: await getFreePlanId(),
@@ -70,6 +79,15 @@ router.post(
         avatarUrl: true,
       },
     });
+
+    // Create the PENDING referral record — no reward yet, only fires on real payment later
+    if (referrerId) {
+      try {
+        await createPendingReferral(referrerId, user.id, user.email);
+      } catch (err) {
+        logger.warn('createPendingReferral failed during registration:', err);
+      }
+    }
 
     const token = signToken({ userId: user.id, email: user.email, role: user.role });
 
