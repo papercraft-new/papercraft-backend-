@@ -29,9 +29,9 @@ import { logger } from '../utils/logger';
 const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
   'tpl_school': {
     fontFamily: 'Times New Roman',
-    titleFontSize: 16,
-    bodyFontSize: 12,
-    questionFontSize: 11,
+    titleFontSize: 20,   // institution name — bold headline
+    bodyFontSize: 13,    // meta info, instructions
+    questionFontSize: 14, // question text — primary reading size
     primaryColor: '1A2E5A',
     outerBorderStyle: 'double',
     outerBorderWidth: 3,
@@ -42,9 +42,9 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
   },
   'tpl_college': {
     fontFamily: 'Arial',
-    titleFontSize: 14,
-    bodyFontSize: 11,
-    questionFontSize: 11,
+    titleFontSize: 18,
+    bodyFontSize: 13,
+    questionFontSize: 14,
     primaryColor: '1C3A6E',
     outerBorderStyle: 'single',
     outerBorderWidth: 2,
@@ -55,9 +55,9 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
   },
   minimal: {
     fontFamily: 'Calibri',
-    titleFontSize: 14,
-    bodyFontSize: 11,
-    questionFontSize: 11,
+    titleFontSize: 18,
+    bodyFontSize: 13,
+    questionFontSize: 14,
     primaryColor: '000000',
     outerBorderStyle: 'none',
     innerBorderStyle: 'none',
@@ -67,9 +67,9 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
   },
   'tpl_coaching': {
     fontFamily: 'Arial',
-    titleFontSize: 15,
-    bodyFontSize: 12,
-    questionFontSize: 11,
+    titleFontSize: 18,
+    bodyFontSize: 13,
+    questionFontSize: 14,
     primaryColor: '8B0000',
     outerBorderStyle: 'double',
     outerBorderWidth: 3,
@@ -78,9 +78,9 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
   },
   'tpl_competitive': {
     fontFamily: 'Times New Roman',
-    titleFontSize: 13,
-    bodyFontSize: 11,
-    questionFontSize: 10,
+    titleFontSize: 16,
+    bodyFontSize: 13,
+    questionFontSize: 14,
     primaryColor: '003366',
     outerBorderStyle: 'double',
     showLogo: false,
@@ -88,9 +88,9 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
   },
   'tpl_luxury': {
     fontFamily: 'Palatino Linotype',
-    titleFontSize: 16,
-    bodyFontSize: 12,
-    questionFontSize: 11,
+    titleFontSize: 20,
+    bodyFontSize: 13,
+    questionFontSize: 14,
     primaryColor: '4A0E00',
     outerBorderStyle: 'double',
     showLogo: true,
@@ -98,12 +98,11 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
     headerLayout: 'centered',
   },
   // ── CLASSIC TEMPLATE ────────────────────
-  // Minimal top header (name, class, date, marks only) + MCQ all 4 in one line
   'tpl_classic': {
     fontFamily: 'Times New Roman',
-    titleFontSize: 14,
-    bodyFontSize: 11,
-    questionFontSize: 11,
+    titleFontSize: 18,
+    bodyFontSize: 13,
+    questionFontSize: 14,
     primaryColor: '111827',
     outerBorderStyle: 'none',
     outerBorderWidth: 0,
@@ -111,6 +110,35 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
     showLogo: false,
     showSignatureBlock: false,
     headerLayout: 'classic-minimal',
+  },
+  // ── WORKSHEET TEMPLATE ──────────────────
+  // Slightly smaller to fit more Qs per page, but still legible
+  'tpl_worksheet': {
+    fontFamily: 'Calibri',
+    titleFontSize: 16,
+    bodyFontSize: 12,
+    questionFontSize: 13,
+    primaryColor: '1F2937',
+    outerBorderStyle: 'single',
+    outerBorderWidth: 2,
+    innerBorderStyle: 'none',
+    showLogo: false,
+    showSignatureBlock: false,
+    headerLayout: 'worksheet',
+  },
+  // ── PROFESSIONAL TEMPLATE ───────────────
+  'tpl_professional': {
+    fontFamily: 'Arial',
+    titleFontSize: 18,
+    bodyFontSize: 13,
+    questionFontSize: 14,
+    primaryColor: '1F2937',
+    outerBorderStyle: 'single',
+    outerBorderWidth: 2,
+    innerBorderStyle: 'none',
+    showLogo: true,
+    showSignatureBlock: true,
+    headerLayout: 'professional',
   },
 };
 
@@ -128,6 +156,8 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
   const children: (Paragraph | Table)[] = [];
 
   const isClassic = templateKey === 'tpl_classic';
+  const isWorksheet = templateKey === 'tpl_worksheet';
+  const isProfessional = templateKey === 'tpl_professional';
   const primaryHex = config.primaryColor || '1A2E5A';
   const font = config.fontFamily || 'Times New Roman';
   const titleSize = (config.titleFontSize || 16) * 2;
@@ -183,6 +213,160 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
       })
     );
     children.push(makeDivider(BorderStyle.SINGLE, '888888', 2));
+  } else if (isWorksheet) {
+    // ── WORKSHEET HEADER ─────────────────────────────────────────────────────
+    // Paper title centred, then Name | Date row with borders top+bottom
+    const wsPageWidth = convertInchesToTwip(8.27 - 1.25 - 1.25);
+
+    // Worksheet title — centred, bold, uppercase
+    children.push(
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing: { before: 0, after: 80 },
+        children: [
+          new TextRun({
+            text: (paper.title || examDetails.examType || 'WORKSHEET').toUpperCase(),
+            bold: true,
+            size: titleSize + 2,
+            font,
+            color: primaryHex,
+          }),
+        ],
+      })
+    );
+
+    // Name | Date row — bordered top and bottom
+    children.push(
+      new Paragraph({
+        spacing: { before: 40, after: 40 },
+        tabStops: [{ type: 'right', position: wsPageWidth }],
+        border: {
+          top: { style: BorderStyle.SINGLE, size: 4, color: primaryHex },
+          bottom: { style: BorderStyle.SINGLE, size: 4, color: primaryHex },
+        },
+        children: [
+          new TextRun({ text: 'Name: _____________________________', size: bodySize, font }),
+          new TextRun({ text: `\tDate: ${dateStr}`, size: bodySize - 2, font }),
+        ],
+      })
+    );
+  } else if (isProfessional) {
+    // ── PROFESSIONAL HEADER ──────────────────────────────────────────────────
+    // Left: logo circle placeholder  |  Right: institution info box
+    const proPageWidth = convertInchesToTwip(8.27 - 1.25 - 1.25);
+    const logoColWidth = convertInchesToTwip(1.4);
+    const infoColWidth = proPageWidth - logoColWidth - convertInchesToTwip(0.2);
+
+    const institutionLines = [
+      (examDetails.institutionName || 'INSTITUTION NAME').toUpperCase(),
+      examDetails.institutionAddress || '',
+      examDetails.department ? `Dept. of ${examDetails.department}` : '',
+      examDetails.facultyName ? `Faculty: ${examDetails.facultyName}` : '',
+    ].filter(Boolean);
+
+    const logoCell = new TableCell({
+      width: { size: logoColWidth, type: WidthType.DXA },
+      borders: {
+        top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE },
+        left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE },
+      },
+      children: [
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { before: 60, after: 10 },
+          children: [new TextRun({ text: '◯', size: 96, font: 'Arial', color: 'BBBBBB' })],
+        }),
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { before: 0, after: 0 },
+          children: [new TextRun({ text: 'LOGO', size: 16, font, color: 'AAAAAA' })],
+        }),
+      ],
+    });
+
+    // Info box: institution name in shaded top row, then detail lines below
+    const detailLines = [
+      examDetails.institutionAddress,
+      examDetails.department ? `Dept. of ${examDetails.department}` : '',
+      examDetails.facultyName ? `Faculty: ${examDetails.facultyName}` : '',
+    ].filter(Boolean) as string[];
+
+    const infoCellChildren: Paragraph[] = [
+      // Institution name — shaded band at top
+      new Paragraph({
+        alignment: AlignmentType.LEFT,
+        spacing: { before: 60, after: 60 },
+        indent: { left: convertInchesToTwip(0.12) },
+        shading: { type: ShadingType.SOLID, color: primaryHex },
+        children: [
+          new TextRun({
+            text: (examDetails.institutionName || 'INSTITUTION NAME').toUpperCase(),
+            bold: true,
+            size: bodySize + 2,
+            font,
+            color: 'FFFFFF',
+          }),
+        ],
+      }),
+      // Detail lines
+      ...detailLines.map(line =>
+        new Paragraph({
+          alignment: AlignmentType.LEFT,
+          spacing: { before: 30, after: 30 },
+          indent: { left: convertInchesToTwip(0.12) },
+          children: [
+            new TextRun({ text: line, size: bodySize - 4, font, color: '333333' }),
+          ],
+        })
+      ),
+    ];
+
+    const infoCell = new TableCell({
+      width: { size: infoColWidth, type: WidthType.DXA },
+      borders: {
+        top: { style: BorderStyle.SINGLE, size: 6, color: primaryHex },
+        bottom: { style: BorderStyle.SINGLE, size: 6, color: primaryHex },
+        left: { style: BorderStyle.SINGLE, size: 6, color: primaryHex },
+        right: { style: BorderStyle.SINGLE, size: 6, color: primaryHex },
+      },
+      children: infoCellChildren,
+    });
+
+    children.push(
+      new Table({
+        width: { size: proPageWidth, type: WidthType.DXA },
+        layout: TableLayoutType.FIXED,
+        borders: {
+          top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE },
+          left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE },
+          insideHorizontal: { style: BorderStyle.NONE }, insideVertical: { style: BorderStyle.NONE },
+        },
+        rows: [new TableRow({ children: [logoCell, infoCell] })],
+      })
+    );
+
+    // Meta row below header: Subject | Class | Date | Duration | Marks — single shaded line
+    const metaPageWidth = convertInchesToTwip(8.27 - 1.25 - 1.25);
+    const q1 = Math.floor(metaPageWidth / 5);
+    children.push(
+      new Paragraph({
+        spacing: { before: 80, after: 60 },
+        shading: { type: ShadingType.SOLID, color: 'F3F4F6' },
+        tabStops: [
+          { type: 'left', position: q1 },
+          { type: 'left', position: q1 * 2 },
+          { type: 'left', position: q1 * 3 },
+          { type: 'right', position: metaPageWidth },
+        ],
+        children: [
+          new TextRun({ text: `Subject: ${examDetails.subject || '—'}`, size: bodySize - 2, font }),
+          new TextRun({ text: `\tClass: ${examDetails.class || '—'}`, size: bodySize - 2, font }),
+          new TextRun({ text: `\tDate: ${dateStr}`, size: bodySize - 2, font }),
+          new TextRun({ text: `\tDuration: ${examDetails.duration || '3 Hrs'}`, size: bodySize - 2, font }),
+          new TextRun({ text: `\tMax. Marks: ${totalMarks || examDetails.totalMarks || '—'}`, size: bodySize - 2, font, bold: true }),
+        ],
+      })
+    );
   } else {
     // ── DEFAULT HEADER ────────────────────────
     // Institution Name
@@ -308,8 +492,8 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
 
   children.push(makeDivider(BorderStyle.SINGLE, primaryHex, 2));
 
-  // ── INSTRUCTIONS ──────────────────────────
-  if (examDetails.instructions && examDetails.instructions.length > 0) {
+  // ── INSTRUCTIONS (not shown for worksheet or professional) ──────────────
+  if (examDetails.instructions && examDetails.instructions.length > 0 && !isWorksheet && !isProfessional) {
     children.push(
       new Paragraph({
         spacing: { before: 80, after: 40 },
@@ -346,7 +530,7 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
 
   // ── SECTIONS & QUESTIONS ──────────────────
   sections.forEach((section) => {
-    // Section Header — shaded box
+    // Section Header — shaded box (compact for worksheet)
     const marksInfo = section.marksPerQuestion
       ? ` (${section.marksPerQuestion} Mark${section.marksPerQuestion > 1 ? 's' : ''} Each)`
       : section.totalMarks
@@ -356,10 +540,10 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
     children.push(
       new Paragraph({
         alignment: AlignmentType.CENTER,
-        spacing: { before: 200, after: 120 },
+        spacing: { before: isWorksheet ? 80 : 200, after: isWorksheet ? 40 : 120 },
         shading: {
           type: ShadingType.SOLID,
-          color: 'EEF2FF',
+          color: isWorksheet ? 'F3F4F6' : 'EEF2FF',
         },
         border: {
           top: { style: BorderStyle.SINGLE, size: 6, color: primaryHex },
@@ -412,7 +596,7 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
       const pageWidthTwip = convertInchesToTwip(8.27 - 1.25 - 1.25); // A4 minus margins
       children.push(
         new Paragraph({
-          spacing: { before: 120, after: 60 },
+          spacing: { before: isWorksheet ? 40 : 160, after: isWorksheet ? 20 : 80 },
           indent: { left: convertInchesToTwip(0.35), hanging: convertInchesToTwip(0.35) },
           tabStops: [{ type: 'right', position: pageWidthTwip }],
           children: [
@@ -429,12 +613,12 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
             ? fixedOptions
             : [...fixedOptions, ...Array(4 - fixedOptions.length).fill({ label: '?', text: '___', isCorrect: false })];
 
-        if (isClassic) {
-          // Classic: all 4 in one line via tabs
+        if (isClassic || isWorksheet) {
+          // Classic + Worksheet: all 4 in one line via tabs
           const colWidth = Math.floor(pageWidthTwip / 4);
           children.push(
             new Paragraph({
-              spacing: { before: 40, after: 80 },
+              spacing: { before: 40, after: isWorksheet ? 20 : 80 },
               indent: { left: convertInchesToTwip(0.5) },
               tabStops: [
                 { type: 'left', position: colWidth },
@@ -487,10 +671,11 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
         );
       }
 
-      // Answer lines
+      // Answer lines — worksheet gets 1 short line only to save space
       if (question.type !== 'MCQ' && question.type !== 'TRUE_FALSE') {
-        const lineCount =
-          question.type === 'LONG_ANSWER' ? 6
+        const lineCount = isWorksheet
+          ? (question.type === 'LONG_ANSWER' ? 2 : 1)
+          : question.type === 'LONG_ANSWER' ? 6
           : question.type === 'DIAGRAM' ? 8
           : question.type === 'FILL_IN_BLANK' ? 1
           : 2;
@@ -498,7 +683,7 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
         for (let i = 0; i < lineCount; i++) {
           children.push(
             new Paragraph({
-              spacing: { before: 80, after: 80 },
+              spacing: { before: isWorksheet ? 30 : 80, after: isWorksheet ? 30 : 80 },
               indent: { left: convertInchesToTwip(0.3) },
               border: {
                 bottom: { style: BorderStyle.SINGLE, size: 2, color: 'CCCCCC' },
@@ -510,12 +695,12 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
       }
 
       // Space after question
-      children.push(new Paragraph({ spacing: { after: 60 }, children: [new TextRun({ text: '' })] }));
+      children.push(new Paragraph({ spacing: { after: isWorksheet ? 20 : 60 }, children: [new TextRun({ text: '' })] }));
     });
   });
 
-  // ── SIGNATURE BLOCK (default only) — no tables, pure paragraphs ──
-  if (!isClassic) {
+  // ── SIGNATURE BLOCK (default + professional only) — no tables, pure paragraphs ──
+  if (!isClassic && !isWorksheet) {
     children.push(makeDivider(BorderStyle.DOUBLE, primaryHex, 4));
 
     // Spacing paragraph
@@ -580,26 +765,26 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
           offsetFrom: PageBorderOffsetFrom.TEXT,
         },
         pageBorderTop: {
-          style: BorderStyle.DOUBLE,
-          size: 12,
+          style: (isWorksheet || isProfessional) ? BorderStyle.SINGLE : BorderStyle.DOUBLE,
+          size: (isWorksheet || isProfessional) ? 6 : 12,
           color: primaryHex,
           space: 36,
         },
         pageBorderBottom: {
-          style: BorderStyle.DOUBLE,
-          size: 12,
+          style: (isWorksheet || isProfessional) ? BorderStyle.SINGLE : BorderStyle.DOUBLE,
+          size: (isWorksheet || isProfessional) ? 6 : 12,
           color: primaryHex,
           space: 36,
         },
         pageBorderLeft: {
-          style: BorderStyle.DOUBLE,
-          size: 12,
+          style: (isWorksheet || isProfessional) ? BorderStyle.SINGLE : BorderStyle.DOUBLE,
+          size: (isWorksheet || isProfessional) ? 6 : 12,
           color: primaryHex,
           space: 24,
         },
         pageBorderRight: {
-          style: BorderStyle.DOUBLE,
-          size: 12,
+          style: (isWorksheet || isProfessional) ? BorderStyle.SINGLE : BorderStyle.DOUBLE,
+          size: (isWorksheet || isProfessional) ? 6 : 12,
           color: primaryHex,
           space: 24,
         },
@@ -631,17 +816,21 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
           default: new Footer({
             children: [
               new Paragraph({
-                alignment: AlignmentType.CENTER,
+                alignment: isWorksheet ? AlignmentType.RIGHT : AlignmentType.CENTER,
                 border: {
                   top: { style: BorderStyle.SINGLE, size: 1, color: 'DDDDDD' },
                 },
-                children: [
-                  new TextRun({ text: 'Page ', size: 18, color: '999999', font }),
-                  new TextRun({ children: [PageNumber.CURRENT], size: 18, color: '999999' }),
-                  new TextRun({ text: ' of ', size: 18, color: '999999' }),
-                  new TextRun({ children: [PageNumber.TOTAL_PAGES], size: 18, color: '999999' }),
-                  new TextRun({ text: `  |  ${examDetails.institutionName || ''}`, size: 18, color: '999999', font }),
-                ],
+                children: isWorksheet
+                  ? [
+                      new TextRun({ text: examDetails.institutionName || '', size: 18, color: '666666', font }),
+                    ]
+                  : [
+                      new TextRun({ text: 'Page ', size: 18, color: '999999', font }),
+                      new TextRun({ children: [PageNumber.CURRENT], size: 18, color: '999999' }),
+                      new TextRun({ text: ' of ', size: 18, color: '999999' }),
+                      new TextRun({ children: [PageNumber.TOTAL_PAGES], size: 18, color: '999999' }),
+                      new TextRun({ text: `  |  ${examDetails.institutionName || ''}`, size: 18, color: '999999', font }),
+                    ],
               }),
             ],
           }),
