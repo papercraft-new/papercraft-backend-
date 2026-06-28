@@ -156,7 +156,7 @@ export interface TemplateConfig {
 
   // Layout
   pageMargins: { top: number; bottom: number; left: number; right: number };
-  headerLayout: 'centered' | 'left' | 'two-column'| 'classic-minimal';
+  headerLayout: 'centered' | 'left' | 'two-column' | 'classic-minimal' | 'worksheet' | 'professional';
   questionSpacing: number;
   lineSpacing: number;
 

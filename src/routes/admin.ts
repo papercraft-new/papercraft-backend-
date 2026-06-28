@@ -205,4 +205,57 @@ router.get(
   })
 );
 
+// ─────────────────────────────────────────
+// GET /api/admin/users/:id/referrals
+// ─────────────────────────────────────────
+
+router.get(
+  '/users/:id/referrals',
+  asyncHandler(async (req: Request, res: Response) => {
+    const { id } = req.params;
+
+    const [user, referrals] = await Promise.all([
+      prisma.user.findUnique({
+        where: { id },
+        select: { id: true, name: true, email: true },
+      }),
+      prisma.referral.findMany({
+        where: { referrerId: id },
+        orderBy: { createdAt: 'desc' },
+        include: {
+          referred: {
+            select: { id: true, name: true, email: true, createdAt: true },
+          },
+        },
+      }),
+    ]);
+
+    if (!user) {
+      res.status(404).json({ success: false, error: 'User not found' });
+      return;
+    }
+
+    res.json({
+      success: true,
+      data: {
+        user,
+        referrals: referrals.map(r => ({
+          id: r.id,
+          referredName: r.referred?.name || '—',
+          referredEmail: r.referred?.email || r.referredEmail,
+          referredAt: r.createdAt,
+          joinedAt: r.referred?.createdAt || r.createdAt,
+          status: r.status,
+          planPurchased: r.planPurchased || null,
+          paidAt: r.paidAt || null,
+        })),
+        totalCount: referrals.length,
+        paidCount: referrals.filter(r => r.status === 'PAID').length,
+        pendingCount: referrals.filter(r => r.status === 'PENDING').length,
+        expiredCount: referrals.filter(r => r.status === 'EXPIRED').length,
+      },
+    });
+  })
+);
+
 export default router;
