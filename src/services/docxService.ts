@@ -29,9 +29,9 @@ import { logger } from '../utils/logger';
 const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
   'tpl_school': {
     fontFamily: 'Times New Roman',
-    titleFontSize: 20,   // institution name — bold headline
-    bodyFontSize: 13,    // meta info, instructions
-    questionFontSize: 14, // question text — primary reading size
+    titleFontSize: 16,   // institution name — bold headline
+    bodyFontSize: 11,    // meta info, instructions
+    questionFontSize: 12, // question text — primary reading size
     primaryColor: '1A2E5A',
     outerBorderStyle: 'double',
     outerBorderWidth: 3,
@@ -42,9 +42,9 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
   },
   'tpl_college': {
     fontFamily: 'Arial',
-    titleFontSize: 18,
-    bodyFontSize: 13,
-    questionFontSize: 14,
+    titleFontSize: 16,
+    bodyFontSize: 11,
+    questionFontSize: 12,
     primaryColor: '1C3A6E',
     outerBorderStyle: 'single',
     outerBorderWidth: 2,
@@ -55,9 +55,9 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
   },
   minimal: {
     fontFamily: 'Calibri',
-    titleFontSize: 18,
-    bodyFontSize: 13,
-    questionFontSize: 14,
+    titleFontSize: 16,
+    bodyFontSize: 11,
+    questionFontSize: 12,
     primaryColor: '000000',
     outerBorderStyle: 'none',
     innerBorderStyle: 'none',
@@ -67,9 +67,9 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
   },
   'tpl_coaching': {
     fontFamily: 'Arial',
-    titleFontSize: 18,
-    bodyFontSize: 13,
-    questionFontSize: 14,
+    titleFontSize: 16,
+    bodyFontSize: 11,
+    questionFontSize: 12,
     primaryColor: '8B0000',
     outerBorderStyle: 'double',
     outerBorderWidth: 3,
@@ -78,9 +78,9 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
   },
   'tpl_competitive': {
     fontFamily: 'Times New Roman',
-    titleFontSize: 16,
-    bodyFontSize: 13,
-    questionFontSize: 14,
+    titleFontSize: 14,
+    bodyFontSize: 11,
+    questionFontSize: 12,
     primaryColor: '003366',
     outerBorderStyle: 'double',
     showLogo: false,
@@ -88,9 +88,9 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
   },
   'tpl_luxury': {
     fontFamily: 'Palatino Linotype',
-    titleFontSize: 20,
-    bodyFontSize: 13,
-    questionFontSize: 14,
+    titleFontSize: 22,
+    bodyFontSize: 14,
+    questionFontSize: 16,
     primaryColor: '4A0E00',
     outerBorderStyle: 'double',
     showLogo: true,
@@ -100,9 +100,9 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
   // ── CLASSIC TEMPLATE ────────────────────
   'tpl_classic': {
     fontFamily: 'Times New Roman',
-    titleFontSize: 18,
-    bodyFontSize: 13,
-    questionFontSize: 14,
+    titleFontSize: 16,
+    bodyFontSize: 11,
+    questionFontSize: 12,
     primaryColor: '111827',
     outerBorderStyle: 'none',
     outerBorderWidth: 0,
@@ -115,9 +115,9 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
   // Slightly smaller to fit more Qs per page, but still legible
   'tpl_worksheet': {
     fontFamily: 'Calibri',
-    titleFontSize: 16,
-    bodyFontSize: 12,
-    questionFontSize: 13,
+    titleFontSize: 13,
+    bodyFontSize: 10,
+    questionFontSize: 11,
     primaryColor: '1F2937',
     outerBorderStyle: 'single',
     outerBorderWidth: 2,
@@ -129,9 +129,9 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
   // ── PROFESSIONAL TEMPLATE ───────────────
   'tpl_professional': {
     fontFamily: 'Arial',
-    titleFontSize: 18,
-    bodyFontSize: 13,
-    questionFontSize: 14,
+    titleFontSize: 16,
+    bodyFontSize: 11,
+    questionFontSize: 12,
     primaryColor: '1F2937',
     outerBorderStyle: 'single',
     outerBorderWidth: 2,
@@ -540,7 +540,7 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
     children.push(
       new Paragraph({
         alignment: AlignmentType.CENTER,
-        spacing: { before: isWorksheet ? 80 : 200, after: isWorksheet ? 40 : 120 },
+        spacing: { before: isWorksheet ? 60 : 140, after: isWorksheet ? 30 : 80 },
         shading: {
           type: ShadingType.SOLID,
           color: isWorksheet ? 'F3F4F6' : 'EEF2FF',
@@ -596,7 +596,7 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
       const pageWidthTwip = convertInchesToTwip(8.27 - 1.25 - 1.25); // A4 minus margins
       children.push(
         new Paragraph({
-          spacing: { before: isWorksheet ? 40 : 160, after: isWorksheet ? 20 : 80 },
+          spacing: { before: isWorksheet ? 30 : 90, after: isWorksheet ? 15 : 40 },
           indent: { left: convertInchesToTwip(0.35), hanging: convertInchesToTwip(0.35) },
           tabStops: [{ type: 'right', position: pageWidthTwip }],
           children: [
@@ -683,7 +683,7 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
         for (let i = 0; i < lineCount; i++) {
           children.push(
             new Paragraph({
-              spacing: { before: isWorksheet ? 30 : 80, after: isWorksheet ? 30 : 80 },
+              spacing: { before: isWorksheet ? 20 : 40, after: isWorksheet ? 20 : 40 },
               indent: { left: convertInchesToTwip(0.3) },
               border: {
                 bottom: { style: BorderStyle.SINGLE, size: 2, color: 'CCCCCC' },
