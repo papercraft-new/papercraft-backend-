@@ -29,9 +29,9 @@ import { logger } from '../utils/logger';
 const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
   'tpl_school': {
     fontFamily: 'Times New Roman',
-    titleFontSize: 16,   // institution name — bold headline
-    bodyFontSize: 11,    // meta info, instructions
-    questionFontSize: 12, // question text — primary reading size
+    titleFontSize: 20,   // institution name — bold headline
+    bodyFontSize: 14,    // meta info, instructions
+    questionFontSize: 16, // question text — primary reading size
     primaryColor: '1A2E5A',
     outerBorderStyle: 'double',
     outerBorderWidth: 3,
@@ -42,9 +42,9 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
   },
   'tpl_college': {
     fontFamily: 'Arial',
-    titleFontSize: 16,
-    bodyFontSize: 11,
-    questionFontSize: 12,
+    titleFontSize: 20,
+    bodyFontSize: 14,
+    questionFontSize: 16,
     primaryColor: '1C3A6E',
     outerBorderStyle: 'single',
     outerBorderWidth: 2,
@@ -55,9 +55,9 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
   },
   minimal: {
     fontFamily: 'Calibri',
-    titleFontSize: 16,
-    bodyFontSize: 11,
-    questionFontSize: 12,
+    titleFontSize: 20,
+    bodyFontSize: 14,
+    questionFontSize: 16,
     primaryColor: '000000',
     outerBorderStyle: 'none',
     innerBorderStyle: 'none',
@@ -67,9 +67,9 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
   },
   'tpl_coaching': {
     fontFamily: 'Arial',
-    titleFontSize: 16,
-    bodyFontSize: 11,
-    questionFontSize: 12,
+    titleFontSize: 20,
+    bodyFontSize: 14,
+    questionFontSize: 16,
     primaryColor: '8B0000',
     outerBorderStyle: 'double',
     outerBorderWidth: 3,
@@ -80,7 +80,7 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
     fontFamily: 'Times New Roman',
     titleFontSize: 14,
     bodyFontSize: 11,
-    questionFontSize: 12,
+    questionFontSize: 14,
     primaryColor: '003366',
     outerBorderStyle: 'double',
     showLogo: false,
@@ -100,9 +100,9 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
   // ── CLASSIC TEMPLATE ────────────────────
   'tpl_classic': {
     fontFamily: 'Times New Roman',
-    titleFontSize: 16,
-    bodyFontSize: 11,
-    questionFontSize: 12,
+    titleFontSize: 20,
+    bodyFontSize: 14,
+    questionFontSize: 16,
     primaryColor: '111827',
     outerBorderStyle: 'none',
     outerBorderWidth: 0,
@@ -117,7 +117,7 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
     fontFamily: 'Calibri',
     titleFontSize: 13,
     bodyFontSize: 10,
-    questionFontSize: 11,
+    questionFontSize: 13,
     primaryColor: '1F2937',
     outerBorderStyle: 'single',
     outerBorderWidth: 2,
@@ -129,9 +129,9 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
   // ── PROFESSIONAL TEMPLATE ───────────────
   'tpl_professional': {
     fontFamily: 'Arial',
-    titleFontSize: 16,
-    bodyFontSize: 11,
-    questionFontSize: 12,
+    titleFontSize: 20,
+    bodyFontSize: 14,
+    questionFontSize: 16,
     primaryColor: '1F2937',
     outerBorderStyle: 'single',
     outerBorderWidth: 2,
