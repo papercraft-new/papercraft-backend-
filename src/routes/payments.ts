@@ -34,7 +34,10 @@ function getRazorpay() {
 
 router.get('/plans', asyncHandler(async (req: Request, res: Response) => {
   const plans = await prisma.plan.findMany({
-    where: { isActive: true },
+    where: {
+      isActive: true,
+      NOT: { id: 'plan_admin' },  // hide admin-only plan from billing page
+    },
     orderBy: { priceMonthly: 'asc' },
   });
   res.json({ success: true, data: plans });
@@ -181,12 +184,21 @@ router.post('/verify', authenticate, asyncHandler(async (req: Request, res: Resp
   const amount = billingCycle === 'yearly' ? plan.priceYearly : plan.priceMonthly;
 
   const now = new Date();
+
+  // Calculate periodEnd based on billing cycle — bulletproof date math
   const periodEnd = new Date(now);
   if (billingCycle === 'yearly') {
     periodEnd.setFullYear(periodEnd.getFullYear() + 1);
+  } else if (billingCycle === 'quarterly') {
+    periodEnd.setMonth(periodEnd.getMonth() + 3);
+  } else if (billingCycle === 'halfyearly') {
+    periodEnd.setMonth(periodEnd.getMonth() + 6);
   } else {
+    // Default: monthly
     periodEnd.setMonth(periodEnd.getMonth() + 1);
   }
+  // Normalize time to end of day to avoid timezone edge cases
+  periodEnd.setHours(23, 59, 59, 999);
 
   // Update subscription
   await prisma.subscription.update({
@@ -197,6 +209,8 @@ router.post('/verify', authenticate, asyncHandler(async (req: Request, res: Resp
       currentPeriodStart: now,
       currentPeriodEnd: periodEnd,
       cancelAtPeriodEnd: false,
+      papersUsedThisMonth: 0,
+      exportsUsedThisMonth: 0,
     },
   });
 
