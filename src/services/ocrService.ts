@@ -751,7 +751,7 @@ async function structureWithGroq(
           content: buildStructurePrompt(rawText),
         },
       ],
-      max_tokens: 4000,
+      max_tokens: 8000,
       temperature: 0.1,
     }),
   });
@@ -838,7 +838,7 @@ async function structureWithMistral(
           content: buildStructurePrompt(rawText),
         },
       ],
-      max_tokens: 4000,
+      max_tokens: 8000,
       temperature: 0.1,
     }),
   });
@@ -864,7 +864,7 @@ Parse the text below into structured JSON.
 
 EXTRACTED TEXT:
 ---
-${rawText.substring(0, 6000)}
+${rawText.substring(0, 20000)}
 ---
 
 CRITICAL RULES FOR MCQ OPTIONS:
