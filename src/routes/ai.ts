@@ -102,14 +102,44 @@ router.post(
       }
 
       const sysLines = [
-        'You are Paptrix AI, an expert educational assistant for Indian schools and colleges.',
-        'You help teachers create and improve exam question papers.',
-        'You can: generate MCQ/short/long answer questions, analyze papers, suggest improvements, tag Bloom levels.',
-        'Supported boards: CBSE, ICSE, State Boards, JEE, NEET, UPSC.',
-        paperContext,
-        'Keep responses concise and practical. Format questions clearly with numbers and marks.',
+        `You are Paptrix AI — an elite Indian educational examiner and question paper expert with 20+ years of experience across CBSE, ICSE, all State Boards, JEE, NEET, UPSC, and University examinations.`,
+
+        `YOUR CORE EXPERTISE:
+- Designing question papers that are perfectly syllabus-aligned and age-appropriate
+- Generating high-quality MCQ, Short Answer, Long Answer, Fill in the Blank, True/False and Numerical questions
+- Following official board patterns (CBSE, ICSE, State Boards) and marking schemes exactly
+- Applying Bloom's Taxonomy (Remember, Understand, Apply, Analyze, Evaluate, Create)
+- Differentiating difficulty levels (Easy/Medium/Hard) with professional precision
+- Balancing question paper sections with proper marks distribution
+- Identifying weak/strong questions and suggesting improvements`,
+
+        `HOW YOU GENERATE QUESTIONS:
+- Use precise, formal examination language — never casual
+- Questions test real understanding, not just word-for-word recall
+- MCQ options are plausible distractors based on common misconceptions
+- Short answer questions use action verbs: Define, State, Explain, Differentiate, Justify
+- Long answer questions use: Discuss, Analyze, Compare, Evaluate, Describe with examples
+- Every question is unique — never repeat similar ideas
+- Questions feel like they belong on a real board examination paper`,
+
+        `SUPPORTED BOARDS & LEVELS:
+- Primary (Class 1–5): Simple language, basic recall
+- Middle School (Class 6–8): Application-based, conceptual
+- Secondary (Class 9–10): Board pattern, marks-weighted
+- Senior Secondary (Class 11–12): Advanced, JEE/NEET aligned
+- Degree/University: Technical, framework-based, analytical`,
+
+        paperContext ? `CURRENT PAPER CONTEXT: ${paperContext}` : '',
+
+        `RESPONSE STYLE:
+- Be concise and practical — teachers are busy
+- When generating questions, format them clearly with question numbers and marks
+- When asked to improve a question, explain WHY the new version is better
+- For marks distribution advice, give specific section-wise breakdowns
+- Always confirm board/class before generating to ensure perfect alignment
+- If something is unclear, ask ONE clarifying question before proceeding`,
       ];
-      const systemPrompt = sysLines.filter(Boolean).join(' ');
+      const systemPrompt = sysLines.filter(Boolean).join('\n\n');
 
       const messages = [
         ...(history as Array<{ role: 'user' | 'assistant'; content: string }>).slice(-10),
@@ -117,7 +147,7 @@ router.post(
       ];
 
       logger.info('Calling Claude for chat, message length: ' + message.length);
-      const response = await callClaude(systemPrompt, messages, 2000, 0.7);
+      const response = await callClaude(systemPrompt, messages, 4000, 0.7);
 
       try {
         await prisma.usageLog.create({
@@ -164,35 +194,133 @@ router.post(
       return res.status(400).json({ success: false, errors: errors.array() });
     }
 
-    const { subject, topic, count, type, difficulty = 'MIXED', class: cls, marks = 1 } = req.body;
+    const { subject, topic, count, type, difficulty = 'MIXED', class: cls, marks = 1, board } = req.body;
 
-    const systemPrompt = `You are an expert question paper setter for Indian schools and colleges.
-Generate exam questions in strict JSON format only. No markdown. No explanation.`;
+    const classNum = parseInt(cls || '10');
+    const isHigherEd = classNum > 12;
+    const boardLabel = board || (classNum <= 10 ? 'CBSE' : classNum <= 12 ? 'CBSE/State Board' : 'University');
 
-    const prompt = `Generate ${count} ${type} questions for:
-Subject: ${subject}
-Topic: ${topic}
-Class: ${cls || 'Not specified'}
-Difficulty: ${difficulty}
-Marks per question: ${marks}
+    const diffGuide =
+      difficulty === 'EASY'   ? 'All questions should be straightforward recall and basic understanding. Students should be able to answer them confidently with textbook knowledge.' :
+      difficulty === 'HARD'   ? 'All questions must be challenging — requiring deep analysis, multi-step reasoning, or application to unfamiliar scenarios. Designed for distinction-level students.' :
+      difficulty === 'MEDIUM' ? 'Questions require understanding and application, not just recall. Include multi-concept questions that make students think.' :
+      `Mix difficulty: ${Math.round(count * 0.3)} easy (recall/knowledge), ${Math.round(count * 0.4)} medium (application/understanding), ${Math.round(count * 0.3)} hard (analysis/evaluation).`;
 
-Return ONLY a valid JSON array:
+    const typeInstructions: Record<string, string> = {
+      MCQ: `RULES FOR MCQ:
+- Exactly 4 options (a, b, c, d) — one clearly correct, three plausible distractors
+- All options similar in length and grammatical structure
+- No "All of the above" or "None of the above" unless absolutely necessary
+- Question stem must be a complete, unambiguous sentence
+- Distractors must be common misconceptions or related concepts — not obviously wrong
+- Test understanding and application, not word-for-word textbook recall
+- Mark exactly one option isCorrect: true`,
+
+      SHORT_ANSWER: `RULES FOR SHORT ANSWER:
+- Answerable in 3–5 lines / 2–4 sentences
+- Use precise action verbs: Define, State, Explain, Differentiate, Give an example of, List, Justify
+- Never use vague stems like "Write about..."
+- Each question must test a specific, well-defined concept
+- ${marks} mark(s) = expect ${marks * 2}–${marks * 3} key answer points`,
+
+      LONG_ANSWER: `RULES FOR LONG ANSWER:
+- Requires detailed answer of 10–15 lines
+- Use higher-order action verbs: Discuss in detail, Compare and contrast, Critically analyze, Evaluate, Describe with examples, Justify with reasons
+- May include structured sub-parts (a), (b), (c)
+- ${marks} marks = expect ${marks * 2}–${marks * 3} key points
+- Test synthesis and evaluation — not just recall`,
+
+      FILL_IN_BLANK: `RULES FOR FILL IN THE BLANK:
+- Exactly ONE blank per question shown as _______
+- The blank must be a key term, formula, value or important concept
+- Sentence must be meaningful and contextual without the blank
+- Answer must be a single word or short phrase (max 4 words)
+- Avoid blanks at the very beginning of sentences`,
+
+      TRUE_FALSE: `RULES FOR TRUE/FALSE:
+- Statement must be absolutely true OR absolutely false — no partial truths
+- Test conceptual understanding, not trivial facts
+- Avoid tricky wording or double negatives
+- Mix of true (~50%) and false (~50%) statements
+- False statements should be based on common misconceptions`,
+
+      NUMERICAL: `RULES FOR NUMERICAL:
+- Include all given data with proper units
+- Single definite numerical answer
+- Use realistic non-trivial values
+- Clearly state the formula/concept being tested
+- Easy = direct substitution; Medium = 2-step; Hard = multi-step derivation`,
+    };
+
+    const boardStyle = isHigherEd
+      ? `University/Degree level: Use technical terminology, reference theoretical frameworks, expect comprehensive answers. Align with university examination standards.`
+      : classNum >= 11
+      ? `Class ${cls} ${boardLabel}: Align with NCERT/board syllabus strictly. Science: include numerical + conceptual. Commerce: include case-based. Humanities: include analytical questions. Match board exam pattern exactly.`
+      : `Class ${cls} ${boardLabel}: Age-appropriate clear language. Classes 1-5: very simple language. Classes 6-8: include application. Classes 9-10: match board exam pattern with proper marks weightage.`;
+
+    const systemPrompt = `You are a senior Indian academic examiner with 20+ years of experience setting question papers for CBSE, ICSE, State Boards, JEE, NEET and University examinations.
+
+Your questions are known for:
+- Perfect syllabus alignment with NCERT and board curriculum
+- Clear, unambiguous language appropriate for the student level
+- Genuine intellectual challenge that tests real understanding
+- Following official board examination patterns exactly
+- Using precise academic terminology and formal examination language
+- Never generating trivial, repetitive or poorly worded questions
+
+You generate questions that experienced teachers trust completely and students find fair, relevant and intellectually stimulating. Every question you generate feels like it belongs on an actual board examination paper.
+
+CRITICAL: Return ONLY valid JSON array. No markdown. No explanation. No preamble. No trailing text.`;
+
+    const prompt = `Generate ${count} high-quality ${type} exam questions.
+
+EXAM CONTEXT:
+- Subject: ${subject}
+- Topic/Chapter: ${topic}
+- Class/Level: ${cls || 'Not specified'}
+- Board: ${boardLabel}
+- Marks per question: ${marks}
+- Difficulty: ${difficulty}
+
+DIFFICULTY GUIDE:
+${diffGuide}
+
+QUESTION TYPE RULES:
+${typeInstructions[type] || ''}
+
+BOARD/LEVEL STYLE:
+${boardStyle}
+
+BLOOM'S TAXONOMY — distribute across questions:
+- REMEMBER (recall): ~20% | UNDERSTAND (explain): ~25% | APPLY (use): ~30% | ANALYZE: ~15% | EVALUATE/CREATE: ~10%
+
+MANDATORY QUALITY RULES:
+1. Every question tests a DIFFERENT concept/sub-topic — no repetition of ideas
+2. Formal examination language — no casual or conversational phrasing
+3. Questions must be answerable from standard textbooks for this class/board
+4. No ambiguous questions, no "from the above" cross-references
+5. Each question complete and standalone
+6. Do NOT include answers inside the question text
+7. Every question must feel like it genuinely belongs on a real ${boardLabel} exam paper for Class ${cls || '10'}
+
+Return ONLY this JSON array:
 [
   {
     "id": "q_1",
     "number": 1,
     "type": "${type}",
-    "text": "Question text here",
+    "text": "Complete question text in formal examination language",
     "marks": ${marks},
     ${type === 'MCQ' ? `"options": [
-      {"label": "a", "text": "Option A", "isCorrect": false},
-      {"label": "b", "text": "Option B", "isCorrect": false},
-      {"label": "c", "text": "Option C", "isCorrect": false},
-      {"label": "d", "text": "Option D", "isCorrect": false}
+      {"label": "a", "text": "First plausible option", "isCorrect": false},
+      {"label": "b", "text": "Correct answer option", "isCorrect": true},
+      {"label": "c", "text": "Third plausible option", "isCorrect": false},
+      {"label": "d", "text": "Fourth plausible option", "isCorrect": false}
     ],` : '"options": [],'}
-    "difficulty": "MEDIUM",
-    "bloomLevel": "UNDERSTAND",
-    "topic": "${topic}"
+    "difficulty": "EASY|MEDIUM|HARD",
+    "bloomLevel": "REMEMBER|UNDERSTAND|APPLY|ANALYZE|EVALUATE|CREATE",
+    "topic": "${topic}",
+    "expectedAnswer": "Key answer points for teacher reference"
   }
 ]`;
 
@@ -200,8 +328,8 @@ Return ONLY a valid JSON array:
       const response = await callClaude(
         systemPrompt,
         [{ role: 'user', content: prompt }],
-        4000,
-        0.3
+        6000,
+        0.65
       );
 
       let questions: Question[] = [];
