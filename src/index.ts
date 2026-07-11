@@ -55,6 +55,7 @@ app.use(cors({
     'http://localhost:3000',
     'http://localhost:3001',
     'https://paptrix.netlify.app',
+    'https://paptrix.in',
     process.env.FRONTEND_URL || '',
   ].filter(Boolean),
   credentials: true,
