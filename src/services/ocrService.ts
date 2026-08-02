@@ -864,7 +864,7 @@ Parse the text below into structured JSON.
 
 EXTRACTED TEXT:
 ---
-${rawText.substring(0, 20000)}
+${rawText.substring(0,30000)}
 ---
 
 CRITICAL RULES FOR MCQ OPTIONS:
