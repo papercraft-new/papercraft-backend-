@@ -10,14 +10,9 @@ import {
   WidthType,
   AlignmentType,
   convertInchesToTwip,
-  Header,
-  Footer,
-  PageNumber,
   UnderlineType,
   ShadingType,
   TableLayoutType,
-  PageBorderDisplay,
-  PageBorderOffsetFrom,
 } from "docx";
 import type { PaperData, Section, Question, TemplateConfig } from '../types';
 import { logger } from '../utils/logger';
@@ -29,9 +24,9 @@ import { logger } from '../utils/logger';
 const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
   'tpl_school': {
     fontFamily: 'Times New Roman',
-    titleFontSize: 20,   // institution name — bold headline
-    bodyFontSize: 14,    // meta info, instructions
-    questionFontSize: 16, // question text — primary reading size
+    titleFontSize: 11,   // paper title (institution name is sized separately, larger)
+    bodyFontSize: 11,    // meta info, instructions, section headers
+    questionFontSize: 10, // question text + options — matches PDF's unified 13px
     primaryColor: '1A2E5A',
     outerBorderStyle: 'double',
     outerBorderWidth: 3,
@@ -100,10 +95,10 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
   // ── CLASSIC TEMPLATE ────────────────────
   'tpl_classic': {
     fontFamily: 'Times New Roman',
-    titleFontSize: 20,
-    bodyFontSize: 14,
-    questionFontSize: 16,
-    primaryColor: '111827',
+    titleFontSize: 11,
+    bodyFontSize: 11,
+    questionFontSize: 10,
+    primaryColor: '111111',
     outerBorderStyle: 'none',
     outerBorderWidth: 0,
     innerBorderStyle: 'none',
@@ -115,9 +110,9 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
   // Slightly smaller to fit more Qs per page, but still legible
   'tpl_worksheet': {
     fontFamily: 'Calibri',
-    titleFontSize: 13,
-    bodyFontSize: 10,
-    questionFontSize: 13,
+    titleFontSize: 11,
+    bodyFontSize: 8,
+    questionFontSize: 10,
     primaryColor: '1F2937',
     outerBorderStyle: 'single',
     outerBorderWidth: 2,
@@ -129,9 +124,9 @@ const TEMPLATE_CONFIGS: Record<string, Partial<TemplateConfig>> = {
   // ── PROFESSIONAL TEMPLATE ───────────────
   'tpl_professional': {
     fontFamily: 'Arial',
-    titleFontSize: 20,
-    bodyFontSize: 14,
-    questionFontSize: 16,
+    titleFontSize: 11,
+    bodyFontSize: 9,
+    questionFontSize: 10,
     primaryColor: '1F2937',
     outerBorderStyle: 'single',
     outerBorderWidth: 2,
@@ -176,7 +171,7 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
     // ── CLASSIC HEADER: institution name → divider → meta row → divider ──
     const classicPageWidth = convertInchesToTwip(8.27 - 1.25 - 1.25);
 
-    // Institution name (centered, bold, uppercase)
+    // Institution name (centered, bold, uppercase) — sized independently of paper-title
     children.push(
       new Paragraph({
         alignment: AlignmentType.CENTER,
@@ -185,25 +180,30 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
           new TextRun({
             text: (examDetails.institutionName || 'INSTITUTION NAME').toUpperCase(),
             bold: true,
-            size: titleSize,
+            size: titleSize + 12,
             font,
-            color: '111827',
+            color: '111111',
           }),
         ],
       })
     );
     children.push(makeDivider(BorderStyle.SINGLE, '888888', 2));
 
-    // Meta row: Name / Class / Date / Marks in one line via tab stops
+    // Meta row: Name / Class / Date / Marks in one line via tab stops.
+    // Carries its own bottom border (matches PDF's .classic-meta-row) —
+    // no separate divider needed right after it.
     const q1 = Math.floor(classicPageWidth / 4);
     children.push(
       new Paragraph({
-        spacing: { before: 60, after: 60 },
+        spacing: { before: 60, after: 100 },
         tabStops: [
           { type: 'left', position: q1 },
           { type: 'left', position: q1 * 2 },
           { type: 'right', position: classicPageWidth },
         ],
+        border: {
+          bottom: { style: BorderStyle.SINGLE, size: 4, color: '888888' },
+        },
         children: [
           new TextRun({ text: 'Name: ___________________', size: bodySize - 2, font }),
           new TextRun({ text: `	Class: ${examDetails.class || '—'}`, size: bodySize - 2, font }),
@@ -212,7 +212,6 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
         ],
       })
     );
-    children.push(makeDivider(BorderStyle.SINGLE, '888888', 2));
   } else if (isWorksheet) {
     // ── WORKSHEET HEADER ─────────────────────────────────────────────────────
     // Paper title centred, then Name | Date row with borders top+bottom
@@ -302,7 +301,7 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
           new TextRun({
             text: (examDetails.institutionName || 'INSTITUTION NAME').toUpperCase(),
             bold: true,
-            size: bodySize + 2,
+            size: bodySize + 6,
             font,
             color: 'FFFFFF',
           }),
@@ -469,28 +468,38 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
     });
   }
 
-  // ── THIN DIVIDER ──────────────────────────
-  children.push(makeDivider(BorderStyle.SINGLE, primaryHex, 2));
+  // ── PAPER TITLE (worksheet's own title already serves this role — skip) ──
+  if (!isWorksheet) {
+    // Pre-title divider: classic already has a border under its meta row,
+    // so an extra line here would double up (matches the PDF fix).
+    if (!isClassic) {
+      children.push(makeDivider(BorderStyle.SINGLE, primaryHex, 2));
+    }
 
-  // ── PAPER TITLE ───────────────────────────
-  children.push(
-    new Paragraph({
-      alignment: AlignmentType.CENTER,
-      spacing: { before: 80, after: 80 },
-      children: [
-        new TextRun({
-          text: (examDetails.examType || 'QUESTION PAPER').toUpperCase(),
-          bold: true,
-          size: titleSize,
-          font,
-          color: primaryHex,
-          underline: { type: UnderlineType.SINGLE },
-        }),
-      ],
-    })
-  );
+    children.push(
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing: { before: 80, after: 80 },
+        children: [
+          new TextRun({
+            text: (examDetails.examType || 'QUESTION PAPER').toUpperCase(),
+            bold: true,
+            size: titleSize,
+            font,
+            color: primaryHex,
+            ...(!isClassic ? { underline: { type: UnderlineType.SINGLE } } : {}),
+          }),
+        ],
+      })
+    );
 
-  children.push(makeDivider(BorderStyle.SINGLE, primaryHex, 2));
+    // Post-title divider: default's title is already underlined, so an
+    // extra line right below it would double up (matches the PDF fix).
+    // Classic and professional keep it.
+    if (isClassic || isProfessional) {
+      children.push(makeDivider(BorderStyle.SINGLE, primaryHex, 2));
+    }
+  }
 
   // ── INSTRUCTIONS (not shown for worksheet or professional) ──────────────
   if (examDetails.instructions && examDetails.instructions.length > 0 && !isWorksheet && !isProfessional) {
@@ -626,9 +635,9 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
                 { type: 'left', position: colWidth * 3 },
               ],
               children: opts.slice(0, 4).flatMap((opt, i) => [
-                ...(i > 0 ? [new TextRun({ text: '	', size: qSize - 2, font })] : []),
-                new TextRun({ text: `(${opt.label}) `, bold: true, size: qSize - 2, font, color: '222222' }),
-                new TextRun({ text: opt.text || '___', size: qSize - 2, font }),
+                ...(i > 0 ? [new TextRun({ text: '	', size: qSize, font })] : []),
+                new TextRun({ text: `(${opt.label}) `, bold: true, size: qSize, font, color: '222222' }),
+                new TextRun({ text: opt.text || '___', size: qSize, font }),
               ]),
             })
           );
@@ -644,12 +653,12 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
                 indent: { left: convertInchesToTwip(0.5) },
                 tabStops: [{ type: 'left', position: halfWidth }],
                 children: [
-                  new TextRun({ text: `(${a.label}) `, bold: true, size: qSize - 2, font, color: '222222' }),
-                  new TextRun({ text: a.text || '___', size: qSize - 2, font }),
+                  new TextRun({ text: `(${a.label}) `, bold: true, size: qSize, font, color: '222222' }),
+                  new TextRun({ text: a.text || '___', size: qSize, font }),
                   ...(b ? [
-                    new TextRun({ text: '	', size: qSize - 2, font }),
-                    new TextRun({ text: `(${b.label}) `, bold: true, size: qSize - 2, font, color: '222222' }),
-                    new TextRun({ text: b.text || '___', size: qSize - 2, font }),
+                    new TextRun({ text: '	', size: qSize, font }),
+                    new TextRun({ text: `(${b.label}) `, bold: true, size: qSize, font, color: '222222' }),
+                    new TextRun({ text: b.text || '___', size: qSize, font }),
                   ] : []),
                 ],
               })
@@ -664,21 +673,25 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
             spacing: { after: 80 },
             indent: { left: convertInchesToTwip(0.35) },
             children: [
-              new TextRun({ text: '(a)  True          ', bold: true, size: qSize - 2, font }),
-              new TextRun({ text: '(b)  False', bold: true, size: qSize - 2, font }),
+              new TextRun({ text: '(a)  True          ', bold: true, size: qSize, font }),
+              new TextRun({ text: '(b)  False', bold: true, size: qSize, font }),
             ],
           })
         );
       }
 
-      // Answer lines — worksheet gets 1 short line only to save space
+      // Answer lines — matches the PDF templates: Short/Long answer questions
+      // get no blank lines (the next question follows directly), Diagram
+      // gets 8, Fill-in-blank gets 1, everything else gets 2.
       if (question.type !== 'MCQ' && question.type !== 'TRUE_FALSE') {
-        const lineCount = isWorksheet
-          ? (question.type === 'LONG_ANSWER' ? 2 : 1)
-          : question.type === 'LONG_ANSWER' ? 6
-          : question.type === 'DIAGRAM' ? 8
-          : question.type === 'FILL_IN_BLANK' ? 1
-          : 2;
+        const lineCount =
+          question.type === 'LONG_ANSWER' || question.type === 'SHORT_ANSWER'
+            ? 0
+            : question.type === 'DIAGRAM'
+            ? 8
+            : question.type === 'FILL_IN_BLANK'
+            ? 1
+            : 2;
 
         for (let i = 0; i < lineCount; i++) {
           children.push(
@@ -747,93 +760,22 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
   }
 
   // ── BUILD DOCUMENT ────────────────────────
+  // Page margins match each template's actual PDF padding (18mm default/
+  // classic/professional, 14mm worksheet). No decorative page-border frame
+  // is drawn — the PDF templates don't have one either.
+  const pageMarginIn = isWorksheet ? 0.551 : 0.709;
   const doc = new Document({
     sections: [
       {
         properties: {
-  page: {
-    margin: {
-      top: convertInchesToTwip(1.15),
-      bottom: convertInchesToTwip(1.15),
-      left: convertInchesToTwip(1.25),
-      right: convertInchesToTwip(1.25),
-    },
-    ...(isClassic ? {} : {
-      borders: {
-        pageBorders: {
-          display: PageBorderDisplay.ALL_PAGES,
-          offsetFrom: PageBorderOffsetFrom.TEXT,
-        },
-        pageBorderTop: {
-          style: (isWorksheet || isProfessional) ? BorderStyle.SINGLE : BorderStyle.DOUBLE,
-          size: (isWorksheet || isProfessional) ? 6 : 12,
-          color: primaryHex,
-          space: 36,
-        },
-        pageBorderBottom: {
-          style: (isWorksheet || isProfessional) ? BorderStyle.SINGLE : BorderStyle.DOUBLE,
-          size: (isWorksheet || isProfessional) ? 6 : 12,
-          color: primaryHex,
-          space: 36,
-        },
-        pageBorderLeft: {
-          style: (isWorksheet || isProfessional) ? BorderStyle.SINGLE : BorderStyle.DOUBLE,
-          size: (isWorksheet || isProfessional) ? 6 : 12,
-          color: primaryHex,
-          space: 24,
-        },
-        pageBorderRight: {
-          style: (isWorksheet || isProfessional) ? BorderStyle.SINGLE : BorderStyle.DOUBLE,
-          size: (isWorksheet || isProfessional) ? 6 : 12,
-          color: primaryHex,
-          space: 24,
-        },
-      },
-    }),
-  },
-},
-        headers: {
-          default: new Header({
-            children: [
-              new Paragraph({
-                alignment: AlignmentType.RIGHT,
-                border: {
-                  bottom: { style: BorderStyle.SINGLE, size: 1, color: 'DDDDDD' },
-                },
-                children: [
-                  new TextRun({
-                    text: `${examDetails.subject || 'Subject'} | ${examDetails.class || 'Class'} | ${examDetails.examType || 'Exam'}`,
-                    size: 18,
-                    color: '999999',
-                    font,
-                  }),
-                ],
-              }),
-            ],
-          }),
-        },
-        footers: {
-          default: new Footer({
-            children: [
-              new Paragraph({
-                alignment: isWorksheet ? AlignmentType.RIGHT : AlignmentType.CENTER,
-                border: {
-                  top: { style: BorderStyle.SINGLE, size: 1, color: 'DDDDDD' },
-                },
-                children: isWorksheet
-                  ? [
-                      new TextRun({ text: examDetails.institutionName || '', size: 18, color: '666666', font }),
-                    ]
-                  : [
-                      new TextRun({ text: 'Page ', size: 18, color: '999999', font }),
-                      new TextRun({ children: [PageNumber.CURRENT], size: 18, color: '999999' }),
-                      new TextRun({ text: ' of ', size: 18, color: '999999' }),
-                      new TextRun({ children: [PageNumber.TOTAL_PAGES], size: 18, color: '999999' }),
-                      new TextRun({ text: `  |  ${examDetails.institutionName || ''}`, size: 18, color: '999999', font }),
-                    ],
-              }),
-            ],
-          }),
+          page: {
+            margin: {
+              top: convertInchesToTwip(pageMarginIn),
+              bottom: convertInchesToTwip(pageMarginIn),
+              left: convertInchesToTwip(pageMarginIn),
+              right: convertInchesToTwip(pageMarginIn),
+            },
+          },
         },
         children,
       },

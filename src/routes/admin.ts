@@ -45,7 +45,7 @@ router.get(
       prisma.payment.aggregate({
         _sum: { amount: true },
         where: {
-          status: 'success',
+          status: 'captured', // matches the status written in payments.ts /verify
           createdAt: { gte: thisMonthStart },
         },
       }),
@@ -55,10 +55,21 @@ router.get(
     const plans = await prisma.plan.findMany({ select: { id: true, name: true, type: true } });
     const planMap = Object.fromEntries(plans.map((p) => [p.id, p]));
 
-    const planStats = usersByPlan.map((s) => ({
-      plan: planMap[s.planId]?.type || 'UNKNOWN',
-      count: s._count,
-    }));
+    // Multiple Plan rows can share the same `type` (e.g. two INSTITUTION plan
+    // records), so aggregate counts by type here — otherwise the same plan
+    // type shows up as separate rows/bars in the dashboard.
+    const planCountsByType: Record<string, number> = {};
+    // Seed every known plan type with 0 first, so a plan with zero *active*
+    // subscribers right now (e.g. Pro) still shows up instead of being
+    // silently omitted from the list.
+    for (const p of plans) {
+      if (!(p.type in planCountsByType)) planCountsByType[p.type] = 0;
+    }
+    for (const s of usersByPlan) {
+      const type = planMap[s.planId]?.type || 'UNKNOWN';
+      planCountsByType[type] = (planCountsByType[type] || 0) + s._count;
+    }
+    const planStats = Object.entries(planCountsByType).map(([plan, count]) => ({ plan, count }));
 
     res.json({
       success: true,
