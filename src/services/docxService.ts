@@ -762,7 +762,8 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
   // ── BUILD DOCUMENT ────────────────────────
   // Page margins match each template's actual PDF padding (18mm default/
   // classic/professional, 14mm worksheet). No decorative page-border frame
-  // is drawn — the PDF templates don't have one either.
+  // is drawn — the PDF templates don't have one either. No repeating
+  // header/footer bars either, to match the PDF's plain page.
   const pageMarginIn = isWorksheet ? 0.551 : 0.709;
   const doc = new Document({
     sections: [
