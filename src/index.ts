@@ -76,7 +76,23 @@ app.use(globalLimiter);
 // GENERAL MIDDLEWARE
 // ─────────────────────────────────────────
 
-app.use(compression());
+// DOCX/PDF/ZIP files are already internally compressed — re-gzipping them
+// wastes CPU and, if a route ever sets its own Content-Length header,
+// risks a body/length mismatch that corrupts the downloaded file. Skip
+// compression for those content types; compress everything else as usual.
+app.use(compression({
+  filter: (req, res) => {
+    const contentType = String(res.getHeader('Content-Type') || '');
+    if (
+      contentType.includes('officedocument') ||
+      contentType.includes('application/pdf') ||
+      contentType.includes('application/zip')
+    ) {
+      return false;
+    }
+    return compression.filter(req, res);
+  },
+}));
 app.use(morgan('combined', { stream: { write: (msg) => logger.info(msg.trim()) } }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
