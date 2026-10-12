@@ -1,0 +1,186 @@
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import compression from 'compression';
+import morgan from 'morgan';
+import { rateLimit } from 'express-rate-limit';
+import dotenv from 'dotenv';
+import { errorHandler } from './middleware/errorHandler';
+import { checkSubscription } from './middleware/checkSubscription';
+import { expireStaleReferrals } from './services/referralService';
+import * as cron from 'node-cron';
+import { logger } from './utils/logger';
+import { prisma } from './utils/prisma';
+
+// Routes
+import authRoutes from './routes/auth';
+import userRoutes from './routes/users';
+import paperRoutes from './routes/papers';
+import ocrRoutes from './routes/ocr';
+import templateRoutes from './routes/templates';
+import exportRoutes from './routes/exports';
+import paymentRoutes from './routes/payments';
+import adminRoutes from './routes/admin';
+import aiRoutes from './routes/ai';
+import otpRoutes from './routes/otp';
+import referralRoutes from './routes/referrals';
+import imageRoutes from './routes/images';
+
+// Add with other routes:
+
+
+dotenv.config();
+
+const app = express();
+app.set('trust proxy', 1);
+const PORT = process.env.PORT || 4000;
+
+// ─────────────────────────────────────────
+// SECURITY MIDDLEWARE
+// ─────────────────────────────────────────
+
+app.use(helmet({
+  crossOriginEmbedderPolicy: false,
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", "data:", "https://res.cloudinary.com"],
+    },
+  },
+}));
+
+app.use(cors({
+  origin: [
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'https://paptrix.netlify.app',
+    'https://paptrix.in',
+    process.env.FRONTEND_URL || '',
+  ].filter(Boolean),
+  credentials: true,
+}));
+
+// Global rate limiter
+const globalLimiter = rateLimit({
+  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000'),
+  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100'),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later.' },
+});
+
+app.use(globalLimiter);
+
+// ─────────────────────────────────────────
+// GENERAL MIDDLEWARE
+// ─────────────────────────────────────────
+
+// DOCX/PDF/ZIP files are already internally compressed — re-gzipping them
+// wastes CPU and, if a route ever sets its own Content-Length header,
+// risks a body/length mismatch that corrupts the downloaded file. Skip
+// compression for those content types; compress everything else as usual.
+app.use(compression({
+  filter: (req, res) => {
+    const contentType = String(res.getHeader('Content-Type') || '');
+    if (
+      contentType.includes('officedocument') ||
+      contentType.includes('application/pdf') ||
+      contentType.includes('application/zip')
+    ) {
+      return false;
+    }
+    return compression.filter(req, res);
+  },
+}));
+app.use(morgan('combined', { stream: { write: (msg) => logger.info(msg.trim()) } }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// ─────────────────────────────────────────
+// HEALTH CHECK
+// ─────────────────────────────────────────
+
+app.get('/health', async (req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      version: '1.0.0',
+      environment: process.env.NODE_ENV || 'development',
+      database: 'connected',
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      timestamp: new Date().toISOString(),
+      environment: process.env.NODE_ENV || 'development',
+      database: 'disconnected',
+      error: String(err),
+    });
+  }
+});
+// ─────────────────────────────────────────
+// API ROUTES
+// ─────────────────────────────────────────
+
+// Check + auto-expire subscriptions on every authenticated API call
+app.use('/api', checkSubscription);
+
+app.use('/api/auth', authRoutes);
+app.use('/api/users', userRoutes);
+app.use('/api/papers', paperRoutes);
+app.use('/api/ocr', ocrRoutes);
+app.use('/api/templates', templateRoutes);
+app.use('/api/exports', exportRoutes);
+app.use('/api/payments', paymentRoutes);
+app.use('/api/admin', adminRoutes);
+app.use('/api/ai', aiRoutes);
+app.use('/api/otp', otpRoutes); 
+app.use('/api/referrals', referralRoutes);
+app.use('/api/images', imageRoutes);
+// ─────────────────────────────────────────
+// ERROR HANDLING
+// ─────────────────────────────────────────
+
+// ── Monthly reset: reset papersUsedThisMonth on 1st of every month ──
+cron.schedule('0 0 1 * *', async () => {
+  try {
+    await prisma.subscription.updateMany({
+      data: { papersUsedThisMonth: 0 },
+    });
+    logger.info('Monthly paper usage reset done');
+  } catch (err) {
+    logger.error('Monthly reset failed:', err);
+  }
+}, { timezone: 'Asia/Kolkata' });
+
+// ── Daily: expire referrals that have sat PENDING past their 90-day window ──
+cron.schedule('0 1 * * *', async () => {
+  try {
+    await expireStaleReferrals();
+  } catch (err) {
+    logger.error('Referral expiry cron failed:', err);
+  }
+}, { timezone: 'Asia/Kolkata' });
+
+app.use(errorHandler);
+
+// 404 handler
+app.use((_req, res) => {
+  res.status(404).json({ error: 'Route not found' });
+});
+
+// ─────────────────────────────────────────
+// START SERVER
+// ─────────────────────────────────────────
+
+app.listen(PORT, () => {
+  logger.info(`🚀 PaperCraft AI Server running on port ${PORT}`);
+  logger.info(`📚 Environment: ${process.env.NODE_ENV}`);
+  logger.info(`🌐 Frontend URL: ${process.env.FRONTEND_URL}`);
+});
+
+export default app;
