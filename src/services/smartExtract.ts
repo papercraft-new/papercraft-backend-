@@ -93,7 +93,8 @@ export async function smartExtractJson(inputType: 'image' | 'pdf', fileUrl: stri
         'Content-Type': 'application/json',
         'x-api-key': process.env.ANTHROPIC_API_KEY!,
         'anthropic-version': '2023-06-01',
-        'anthropic-beta': inputType === 'pdf' ? 'pdfs-2024-09-25,output-128k-2025-02-19' : 'output-128k-2025-02-19',
+        // no output-128k beta: 16000 tokens does not need it, and a beta the model does not accept fails the call
+        ...(inputType === 'pdf' ? { 'anthropic-beta': 'pdfs-2024-09-25' } : {}),
       },
       body: JSON.stringify({
         model: process.env.SMART_EXTRACTION_MODEL || 'claude-sonnet-4-6',

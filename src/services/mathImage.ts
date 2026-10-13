@@ -3,20 +3,6 @@
 // MathJax draws the equation as SVG paths (no fonts needed), resvg turns the SVG into a
 // transparent PNG at 3x size so it stays sharp in print.
 
-import { mathjax } from 'mathjax-full/js/mathjax';
-import { TeX } from 'mathjax-full/js/input/tex';
-import { SVG } from 'mathjax-full/js/output/svg';
-import { liteAdaptor } from 'mathjax-full/js/adaptors/liteAdaptor';
-import { RegisterHTMLHandler } from 'mathjax-full/js/handlers/html';
-import 'mathjax-full/js/input/tex/base/BaseConfiguration';
-import 'mathjax-full/js/input/tex/ams/AmsConfiguration';
-import 'mathjax-full/js/input/tex/newcommand/NewcommandConfiguration';
-import 'mathjax-full/js/input/tex/noundefined/NoUndefinedConfiguration';
-import 'mathjax-full/js/input/tex/boldsymbol/BoldsymbolConfiguration';
-import 'mathjax-full/js/input/tex/cancel/CancelConfiguration';
-import 'mathjax-full/js/input/tex/color/ColorConfiguration';
-import { Resvg } from '@resvg/resvg-js';
-
 export interface MathPicture {
   png: Buffer;
   /** Size on the page, in CSS pixels (96 per inch), at the requested font size. */
@@ -30,15 +16,32 @@ const PNG_SCALE = 3;
 const EX_PER_EM = 0.431; // x-height of the MathJax TeX font, in em
 const MAX_WIDTH_PX = 600; // A4 text width with 1.25" margins is about 602 px
 
-let engine: { html: any; adaptor: any } | null = null;
+// The equation packages are loaded the first time an equation is drawn, not when the server starts:
+// if the native PNG module is missing on a server, only Word equations stop (they show as text)
+// instead of the whole backend failing to start.
+let engine: { html: any; adaptor: any; Resvg: any } | null = null;
 
 function getEngine() {
   if (!engine) {
+    /* eslint-disable @typescript-eslint/no-require-imports */
+    const { mathjax } = require('mathjax-full/js/mathjax');
+    const { TeX } = require('mathjax-full/js/input/tex');
+    const { SVG } = require('mathjax-full/js/output/svg');
+    const { liteAdaptor } = require('mathjax-full/js/adaptors/liteAdaptor');
+    const { RegisterHTMLHandler } = require('mathjax-full/js/handlers/html');
+    require('mathjax-full/js/input/tex/base/BaseConfiguration');
+    require('mathjax-full/js/input/tex/ams/AmsConfiguration');
+    require('mathjax-full/js/input/tex/newcommand/NewcommandConfiguration');
+    require('mathjax-full/js/input/tex/noundefined/NoUndefinedConfiguration');
+    require('mathjax-full/js/input/tex/boldsymbol/BoldsymbolConfiguration');
+    require('mathjax-full/js/input/tex/cancel/CancelConfiguration');
+    require('mathjax-full/js/input/tex/color/ColorConfiguration');
+    const { Resvg } = require('@resvg/resvg-js');
     const adaptor = liteAdaptor();
     RegisterHTMLHandler(adaptor);
     const tex = new TeX({ packages: ['base', 'ams', 'newcommand', 'noundefined', 'boldsymbol', 'cancel', 'color'] });
     const svg = new SVG({ fontCache: 'none' });
-    engine = { html: mathjax.document('', { InputJax: tex, OutputJax: svg }), adaptor };
+    engine = { html: mathjax.document('', { InputJax: tex, OutputJax: svg }), adaptor, Resvg };
   }
   return engine;
 }
@@ -51,7 +54,7 @@ export function renderMathPicture(latex: string, display: boolean, fontPx: numbe
   const hit = cache.get(key);
   if (hit) return hit;
 
-  const { html, adaptor } = getEngine();
+  const { html, adaptor, Resvg } = getEngine();
   const node = html.convert(latex, { display, em: 16, ex: 8, containerWidth: 1280 });
   let svg: string = adaptor.innerHTML(node);
   if (!svg.includes('<svg') || svg.includes('data-mjx-error')) throw new Error('MathJax could not render this formula');

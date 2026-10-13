@@ -29,6 +29,9 @@ export async function processOcrJob(
 
   // Smart extraction (step 6): the page goes straight to Claude and comes back structured, with
   // formulas, tables, match columns and figure boxes. Any failure falls through to the standard pipeline.
+  if ((inputType === 'image' || inputType === 'pdf') && !smartExtractionEnabled()) {
+    logger.info('Smart extraction is off (no ANTHROPIC_API_KEY, or SMART_EXTRACTION=0): using the standard pipeline.');
+  }
   if ((inputType === 'image' || inputType === 'pdf') && smartExtractionEnabled()) {
     try {
       const json = await smartExtractJson(inputType, content);
