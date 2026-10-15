@@ -8,6 +8,7 @@ import dotenv from 'dotenv';
 import { errorHandler } from './middleware/errorHandler';
 import { checkSubscription } from './middleware/checkSubscription';
 import { expireStaleReferrals } from './services/referralService';
+import { sweepExpiredAttempts } from './services/examService';
 import * as cron from 'node-cron';
 import { logger } from './utils/logger';
 import { prisma } from './utils/prisma';
@@ -25,6 +26,8 @@ import aiRoutes from './routes/ai';
 import otpRoutes from './routes/otp';
 import referralRoutes from './routes/referrals';
 import imageRoutes from './routes/images';
+import testRoutes from './routes/tests';
+import publicTestRoutes from './routes/publicTests';
 
 // Add with other routes:
 
@@ -32,7 +35,10 @@ import imageRoutes from './routes/images';
 dotenv.config();
 
 const app = express();
-app.set('trust proxy', 1);
+// How many proxies sit in front of this server (Render = 1; Render behind Cloudflare = 2).
+// The rate limiters use req.ip, so this must be right. Check it with DEBUG_IP=1 and GET /__ip.
+const TRUST_PROXY_HOPS = parseInt(process.env.TRUST_PROXY_HOPS || '1', 10) || 1;
+app.set('trust proxy', TRUST_PROXY_HOPS);
 const PORT = process.env.PORT || 4000;
 
 // ─────────────────────────────────────────
@@ -71,7 +77,23 @@ const globalLimiter = rateLimit({
   message: { error: 'Too many requests, please try again later.' },
 });
 
-app.use(globalLimiter);
+// Student exam routes have their own, higher limits (a whole classroom shares one IP).
+app.use((req, res, next) =>
+  req.path.startsWith('/api/public/tests') ? next() : globalLimiter(req, res, next)
+);
+
+// Temporary: shows what the server sees, to verify TRUST_PROXY_HOPS. Off unless DEBUG_IP=1.
+if (process.env.DEBUG_IP === '1') {
+  app.get('/__ip', (req, res) => {
+    res.json({
+      ip: req.ip,
+      ips: req.ips,
+      hops: TRUST_PROXY_HOPS,
+      cfConnectingIp: req.header('cf-connecting-ip') || null,
+      xForwardedFor: req.header('x-forwarded-for') || null,
+    });
+  });
+}
 
 // ─────────────────────────────────────────
 // GENERAL MIDDLEWARE
@@ -126,6 +148,9 @@ app.get('/health', async (req, res) => {
 // API ROUTES
 // ─────────────────────────────────────────
 
+// Public student exam routes: no login, so they skip the subscription check.
+app.use('/api/public/tests', publicTestRoutes);
+
 // Check + auto-expire subscriptions on every authenticated API call
 app.use('/api', checkSubscription);
 
@@ -141,6 +166,7 @@ app.use('/api/ai', aiRoutes);
 app.use('/api/otp', otpRoutes); 
 app.use('/api/referrals', referralRoutes);
 app.use('/api/images', imageRoutes);
+app.use('/api/tests', testRoutes);
 // ─────────────────────────────────────────
 // ERROR HANDLING
 // ─────────────────────────────────────────
@@ -156,6 +182,11 @@ cron.schedule('0 0 1 * *', async () => {
     logger.error('Monthly reset failed:', err);
   }
 }, { timezone: 'Asia/Kolkata' });
+
+// ── Every minute: auto-submit exam attempts whose time ran out and whose student never came back ──
+cron.schedule('* * * * *', () => {
+  sweepExpiredAttempts().catch(err => logger.error('Attempt sweep cron failed:', err));
+});
 
 // ── Daily: expire referrals that have sat PENDING past their 90-day window ──
 cron.schedule('0 1 * * *', async () => {

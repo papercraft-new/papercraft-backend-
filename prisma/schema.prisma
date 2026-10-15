@@ -104,6 +104,7 @@ model User {
 
   subscription  Subscription?
   papers        Paper[]
+  tests         Test[]
   templates     Template[]
   exports       Export[]
   ocrJobs       OcrJob[]
@@ -309,6 +310,7 @@ model Paper {
   exports     Export[]
   ocrJobs     OcrJob[]
   versions    PaperVersion[]
+  tests       Test[]
 
   @@map("papers")
 }
@@ -460,4 +462,87 @@ model ReferralReward {
 
   @@index([referrerId])
   @@map("referral_rewards")
+}
+
+// ─────────────────────────────────────────
+// ONLINE TESTS (CBT)
+// ─────────────────────────────────────────
+
+enum TestStatus {
+  PUBLISHED
+  CLOSED
+}
+
+enum AttemptStatus {
+  IN_PROGRESS
+  SUBMITTED
+}
+
+model Test {
+  id               String     @id @default(cuid())
+  code             String     @unique            // the link code: /t/<code>
+  userId           String
+  paperId          String?                       // kept as null if the paper is later deleted
+  title            String
+  instructions     String?
+  durationMin      Int
+  marksPerQuestion Float      @default(1)        // used when a question has no marks of its own
+  negativeMarks    Float      @default(0)        // taken off per wrong answer
+  shuffleQuestions Boolean    @default(false)
+  shuffleOptions   Boolean    @default(false)
+  opensAt          DateTime?
+  closesAt         DateTime?
+  showResult       Boolean    @default(true)     // student sees their score at the end
+  showAnswers      Boolean    @default(false)    // and the correct answers
+  onePerRoll       Boolean    @default(true)
+  status           TestStatus @default(PUBLISHED)
+  snapshot         Json                          // frozen copy of the questions + correct options
+  totalMarks       Float
+  questionCount    Int
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id])
+  paper    Paper?    @relation(fields: [paperId], references: [id], onDelete: SetNull)
+  attempts Attempt[]
+
+  @@index([userId])
+  @@map("tests")
+}
+
+model Attempt {
+  id          String        @id @default(cuid())
+  testId      String
+  token       String        @unique              // the student's secret for this attempt
+  name        String
+  rollNo      String
+  status      AttemptStatus @default(IN_PROGRESS)
+  startedAt   DateTime      @default(now())
+  deadlineAt  DateTime                           // the server-side timer
+  submittedAt DateTime?
+  score       Float?
+  order       Json?                              // the shuffled order this student saw
+  tabSwitches Int           @default(0)          // how many times the student left the exam screen
+
+  test    Test     @relation(fields: [testId], references: [id], onDelete: Cascade)
+  answers Answer[]
+
+  @@index([testId, rollNo])
+  @@map("attempts")
+}
+
+model Answer {
+  id           String   @id @default(cuid())
+  attemptId    String
+  questionId   String
+  selected     String?                           // option label
+  marked       Boolean  @default(false)
+  visited      Boolean  @default(false)
+  timeSpentSec Int      @default(0)
+  updatedAt    DateTime @updatedAt
+
+  attempt Attempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+
+  @@unique([attemptId, questionId])
+  @@map("answers")
 }
