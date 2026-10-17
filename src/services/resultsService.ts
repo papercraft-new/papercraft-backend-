@@ -3,17 +3,19 @@
 // Only submitted attempts are scored and ranked; running ones are listed separately.
 
 import { prisma } from '../utils/prisma';
-import { getExam, type TestMeta } from './examService';
+import { getExam, evaluate, type TestMeta } from './examService';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 export interface StudentRow {
+  attemptId: string;
   rank: number;
   name: string;
   rollNo: string;
   score: number;
   correct: number;
   wrong: number;
+  partial: number; // multiple-correct answers that earned part marks
   skipped: number;
   timeTakenSec: number;
   submittedAt: number | null;
@@ -24,12 +26,17 @@ export interface StudentRow {
 export interface QuestionStat {
   id: string;
   no: number;
+  kind: 'SCQ' | 'MSQ' | 'NAT';
   section: string;
   text: string;
-  correct: string;
+  correct: string;          // SCQ: label. MSQ: "a,c". NAT: the number.
+  correctLabels: string[];  // SCQ/MSQ: the correct option labels
+  tolerance: number | null; // NAT only
+  commonWrong: Array<{ value: string; count: number }>; // NAT: the most common wrong answers
   marks: number;
   right: number;
   wrong: number;
+  partial: number;
   skipped: number;
   pctRight: number;
   avgTimeSec: number | null;
@@ -44,6 +51,7 @@ function plain(text: string, max = 160) {
 export async function buildResults(test: TestMeta) {
   const idx = await getExam(test);
   const neg = test.negativeMarks;
+  const partialMarking = test.partialMarking;
 
   const attempts = await prisma.attempt.findMany({
     where: { testId: test.id },
@@ -62,19 +70,20 @@ export async function buildResults(test: TestMeta) {
   }));
 
   // per-question counters
-  const qStats = new Map<string, { right: number; wrong: number; skipped: number; timeSum: number; timeN: number; options: Record<string, number> }>();
+  const qStats = new Map<string, { right: number; wrong: number; partial: number; skipped: number; timeSum: number; timeN: number; options: Record<string, number>; wrongValues: Map<string, number> }>();
   idx.byId.forEach((e, id) => {
     const options: Record<string, number> = {};
-    e.q.options.forEach(o => { options[o.label] = 0; });
-    qStats.set(id, { right: 0, wrong: 0, skipped: 0, timeSum: 0, timeN: 0, options });
+    (e.q.options || []).forEach(o => { options[o.label] = 0; });
+    qStats.set(id, { right: 0, wrong: 0, partial: 0, skipped: 0, timeSum: 0, timeN: 0, options, wrongValues: new Map() });
   });
 
   const rows: Omit<StudentRow, 'rank'>[] = [];
-  const stillWriting: Array<{ name: string; rollNo: string; startedAt: number; deadlineAt: number; answered: number }> = [];
+  const stillWriting: Array<{ attemptId: string; name: string; rollNo: string; startedAt: number; deadlineAt: number; answered: number }> = [];
 
   for (const a of attempts) {
     if (a.status !== 'SUBMITTED') {
       stillWriting.push({
+        attemptId: a.id,
         name: a.name, rollNo: a.rollNo, startedAt: a.startedAt.getTime(), deadlineAt: a.deadlineAt.getTime(),
         answered: a.answers.filter(r => r.selected).length,
       });
@@ -82,24 +91,32 @@ export async function buildResults(test: TestMeta) {
     }
     const chosen = new Map(a.answers.map(r => [r.questionId, r]));
     const sectionScores = idx.sections.map(() => 0);
-    let correct = 0, wrong = 0, skipped = 0;
+    let correct = 0, wrong = 0, partial = 0, skipped = 0;
 
     idx.byId.forEach((e, qid) => {
       const r = chosen.get(qid);
       const st = qStats.get(qid)!;
       if (r && r.timeSpentSec > 0) { st.timeSum += r.timeSpentSec; st.timeN++; }
       if (!r || !r.selected) { skipped++; st.skipped++; return; }
-      if (r.selected in st.options) st.options[r.selected]++;
-      if (r.selected === e.correct) { correct++; st.right++; sectionScores[e.sectionIdx] += e.q.marks; }
-      else { wrong++; st.wrong++; sectionScores[e.sectionIdx] -= neg; }
+      // how many students picked each option (multiple-correct: every ticked option counts)
+      if (e.kind !== 'NAT') r.selected.split(',').forEach(l => { if (l in st.options) st.options[l]++; });
+      const ev = evaluate(e, r.selected, neg, partialMarking);
+      sectionScores[e.sectionIdx] += ev.marks;
+      if (ev.verdict === 'right') { correct++; st.right++; }
+      else if (ev.verdict === 'partial') { partial++; st.partial++; }
+      else {
+        wrong++; st.wrong++;
+        if (e.kind === 'NAT') st.wrongValues.set(r.selected, (st.wrongValues.get(r.selected) || 0) + 1);
+      }
     });
 
     const submittedAt = a.submittedAt;
     rows.push({
+      attemptId: a.id,
       name: a.name,
       rollNo: a.rollNo,
       score: round2(sectionScores.reduce((x, y) => x + y, 0)),
-      correct, wrong, skipped,
+      correct, wrong, partial, skipped,
       timeTakenSec: submittedAt ? Math.max(0, Math.round((submittedAt.getTime() - a.startedAt.getTime()) / 1000)) : 0,
       submittedAt: submittedAt ? submittedAt.getTime() : null,
       sections: sectionScores.map(round2),
@@ -152,12 +169,17 @@ export async function buildResults(test: TestMeta) {
       questions.push({
         id: q.id,
         no: q.number,
+        kind: e.kind,
         section: s.title,
         text: plain(e.view.text),
         correct: e.correct,
+        correctLabels: Array.from(e.correctSet).sort(),
+        tolerance: e.kind === 'NAT' ? e.tolerance ?? 0 : null,
+        commonWrong: Array.from(st.wrongValues.entries()).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([value, count]) => ({ value, count })),
         marks: q.marks,
         right: st.right,
         wrong: st.wrong,
+        partial: st.partial,
         skipped: st.skipped,
         pctRight: n ? Math.round((st.right / n) * 100) : 0,
         avgTimeSec: st.timeN ? Math.round(st.timeSum / st.timeN) : null,
@@ -196,11 +218,11 @@ function cell(v: unknown): string {
 const mmss = (sec: number) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
 
 export function resultsCsv(r: Awaited<ReturnType<typeof buildResults>>): string {
-  const head = ['Rank', 'Name', 'Roll No', 'Score', 'Out of', 'Correct', 'Wrong', 'Skipped', 'Time taken (m:ss)', 'Submitted at (UTC)', 'Tab switches', ...r.sections.map(s => `${s.title} score`)];
+  const head = ['Rank', 'Name', 'Roll No', 'Score', 'Out of', 'Correct', 'Wrong', 'Partial', 'Skipped', 'Time taken (m:ss)', 'Submitted at (UTC)', 'Tab switches', ...r.sections.map(s => `${s.title} score`)];
   const lines = [head.map(cell).join(',')];
   for (const s of r.students) {
     lines.push([
-      s.rank, s.name, s.rollNo, s.score, r.test.totalMarks, s.correct, s.wrong, s.skipped,
+      s.rank, s.name, s.rollNo, s.score, r.test.totalMarks, s.correct, s.wrong, s.partial, s.skipped,
       mmss(s.timeTakenSec), s.submittedAt ? new Date(s.submittedAt).toISOString() : '', s.tabSwitches, ...s.sections,
     ].map(cell).join(','));
   }

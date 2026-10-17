@@ -499,6 +499,7 @@ model Test {
   snapshot         Json                          // frozen copy of the questions + correct options
   totalMarks       Float
   questionCount    Int
+  partialMarking   Boolean    @default(false)   // partial marks for multiple-correct questions
   createdAt        DateTime   @default(now())
   updatedAt        DateTime   @updatedAt
 

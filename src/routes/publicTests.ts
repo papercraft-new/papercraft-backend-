@@ -174,9 +174,10 @@ router.put('/attempt/answers', ...attemptChain, asyncHandler(async (req, res) =>
 
 router.post('/attempt/event', ...attemptChain, asyncHandler(async (req, res) => {
   const a = res.locals.attempt;
-  if (a.status === 'SUBMITTED') return send(res, { ok: true });
+  // Also the exam screen's heartbeat: it learns about time extensions and server-side submits from here.
+  if (a.status === 'SUBMITTED') return send(res, { ok: true, submitted: true });
   await recordTabSwitches(a.id, req.body?.tabSwitches);
-  return send(res, { ok: true });
+  return send(res, { ok: true, submitted: false, deadlineAt: a.deadlineAt.getTime() });
 }));
 
 router.post('/attempt/submit', ...attemptChain, asyncHandler(async (req, res) => {

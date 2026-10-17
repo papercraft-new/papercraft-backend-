@@ -17,16 +17,25 @@ export const SUBMIT_GRACE_SEC = Math.max(0, parseInt(process.env.EXAM_SUBMIT_GRA
 // ─────────────────────────────────────────
 
 interface SnapOption { label: string; text?: string; isCorrect?: boolean; image?: any }
+type Kind = 'SCQ' | 'MSQ' | 'NAT'; // single-answer MCQ, multiple-correct MCQ, numerical
 interface SnapQuestion {
   id: string; number: number; text?: string; marks: number;
-  options: SnapOption[]; images?: any[]; tables?: any[];
+  kind?: Kind;                       // missing = SCQ (every test published before multiple-correct and numerical existed)
+  options?: SnapOption[]; images?: any[]; tables?: any[];
+  answer?: number; tolerance?: number; // NAT only
 }
 interface SnapSection { id: string; title: string; description?: string; questions: SnapQuestion[] }
 interface Snapshot { examDetails?: Record<string, any>; sections: SnapSection[] }
 
 interface ViewOption { label: string; text: string; image?: any }
 interface BaseView { text: string; options: ViewOption[]; images?: any[]; tables?: any[] }
-interface IndexEntry { q: SnapQuestion; sectionIdx: number; correct: string; labels: Set<string>; view: BaseView }
+export interface IndexEntry {
+  q: SnapQuestion; sectionIdx: number; kind: Kind;
+  correct: string;               // SCQ: the label. MSQ: labels like "a,c". NAT: the number as text.
+  correctSet: Set<string>;       // SCQ/MSQ: the correct labels
+  answer?: number; tolerance?: number; // NAT
+  labels: Set<string>; view: BaseView;
+}
 
 export interface ExamIndex {
   examDetails: Record<string, any>;
@@ -43,7 +52,7 @@ const META = {
   id: true, code: true, title: true, instructions: true, durationMin: true, marksPerQuestion: true,
   negativeMarks: true, shuffleQuestions: true, shuffleOptions: true, opensAt: true, closesAt: true,
   showResult: true, showAnswers: true, onePerRoll: true, status: true, totalMarks: true,
-  questionCount: true, updatedAt: true,
+  questionCount: true, partialMarking: true, updatedAt: true,
 } as const;
 export const TEST_META = META;
 export type TestMeta = Prisma.TestGetPayload<{ select: typeof META }>;
@@ -99,33 +108,45 @@ function indexSnapshot(snap: Snapshot): ExamIndex {
 
   sections.forEach((s, sectionIdx) => {
     for (const q of s.questions || []) {
-      const correctOpt = (q.options || []).find(o => o.isCorrect === true);
-      if (!correctOpt) continue; // cannot happen for a published test: only one-correct MCQs are kept
-
-      // The same clean-up the PDF applies, so the question reads exactly as on paper.
-      const { cleanedQuestionText, fixedOptions } = normalizeOptions(q.options as any, q.text || '');
-      const fixedByLabel = new Map(fixedOptions.map(o => [o.label, o]));
-      const options: ViewOption[] = q.options.map(o => {
-        const f = fixedByLabel.get(o.label);
-        const image = pickImage(o.image);
-        return { label: o.label, text: f ? f.text : o.text || '', ...(image ? { image } : {}) };
-      });
+      const kind: Kind = q.kind === 'MSQ' || q.kind === 'NAT' ? q.kind : 'SCQ';
+      const opts = Array.isArray(q.options) ? q.options : [];
       const images = (Array.isArray(q.images) ? q.images : []).map(pickImage).filter(Boolean);
       const tables = (Array.isArray(q.tables) ? q.tables : [])
         .filter(t => t && Array.isArray(t.rows))
         .map(t => ({ rows: t.rows, ...(t.headerRow === false ? { headerRow: false } : {}) }));
+      const extras = { ...(images.length ? { images } : {}), ...(tables.length ? { tables } : {}) };
+
+      if (kind === 'NAT') {
+        const answer = Number(q.answer);
+        if (!Number.isFinite(answer)) continue; // cannot happen for a published test
+        byId.set(q.id, {
+          q, sectionIdx, kind, correct: String(answer), correctSet: new Set(), labels: new Set(),
+          answer, tolerance: Math.max(0, Number(q.tolerance) || 0),
+          view: { text: q.text || '', options: [], ...extras },
+        });
+        continue;
+      }
+
+      const correctLabels = opts.filter(o => o.isCorrect === true).map(o => o.label);
+      if (correctLabels.length < 1) continue; // cannot happen for a published test
+
+      // The same clean-up the PDF applies, so the question reads exactly as on paper.
+      const { cleanedQuestionText, fixedOptions } = normalizeOptions(opts as any, q.text || '');
+      const fixedByLabel = new Map(fixedOptions.map(o => [o.label, o]));
+      const options: ViewOption[] = opts.map(o => {
+        const f = fixedByLabel.get(o.label);
+        const image = pickImage(o.image);
+        return { label: o.label, text: f ? f.text : o.text || '', ...(image ? { image } : {}) };
+      });
 
       byId.set(q.id, {
         q,
         sectionIdx,
-        correct: correctOpt.label,
-        labels: new Set(q.options.map(o => o.label)),
-        view: {
-          text: cleanedQuestionText || q.text || '',
-          options,
-          ...(images.length ? { images } : {}),
-          ...(tables.length ? { tables } : {}),
-        },
+        kind,
+        correct: kind === 'MSQ' ? correctLabels.slice().sort().join(',') : correctLabels[0],
+        correctSet: new Set(correctLabels),
+        labels: new Set(opts.map(o => o.label)),
+        view: { text: cleanedQuestionText || q.text || '', options, ...extras },
       });
     }
   });
@@ -164,7 +185,7 @@ export function buildOrder(idx: ExamIndex, test: { shuffleQuestions: boolean; sh
   const order: Order = { sections };
   if (test.shuffleOptions) {
     order.opts = {};
-    idx.byId.forEach((e, id) => { order.opts![id] = shuffled(e.q.options.map(o => o.label)); });
+    idx.byId.forEach((e, id) => { if (e.q.options?.length) order.opts![id] = shuffled(e.q.options.map(o => o.label)); });
   }
   return order;
 }
@@ -194,12 +215,13 @@ export function viewSections(idx: ExamIndex, order: Order | null | undefined, wi
       return {
         id: qid,
         no,
+        kind: e.kind,
         text: e.view.text,
         marks: e.q.marks,
         options,
         ...(e.view.images ? { images: e.view.images } : {}),
         ...(e.view.tables ? { tables: e.view.tables } : {}),
-        ...(withCorrect ? { correct: e.correct } : {}),
+        ...(withCorrect ? { correct: e.correct, ...(e.kind === 'NAT' ? { tolerance: e.tolerance } : {}) } : {}),
       };
     });
     return { id: s.id, title: s.title, ...(s.description ? { description: s.description } : {}), questions };
@@ -216,6 +238,21 @@ export function answersMap(rows: Array<{ questionId: string; selected: string | 
 // Answers: validate, save, grade
 // ─────────────────────────────────────────
 
+const NUM_RE = /^-?(\d+\.?\d*|\.\d+)$/;
+
+/** One answer, checked against its question's kind. Anything invalid becomes null (no answer). */
+function cleanSelected(e: IndexEntry, raw: string): string | null {
+  const v = raw.trim();
+  if (!v) return null;
+  if (e.kind === 'NAT') return v.length <= 20 && NUM_RE.test(v) ? v : null;
+  if (e.kind === 'MSQ') {
+    const parts = Array.from(new Set(v.split(',').map(x => x.trim()).filter(Boolean)));
+    if (!parts.length || !parts.every(l => e.labels.has(l))) return null;
+    return parts.sort().join(',');
+  }
+  return e.labels.has(v) ? v : null;
+}
+
 /** Only known questions and real option labels get through; anything else is dropped. null = not an object. */
 export function cleanAnswers(idx: ExamIndex, raw: unknown, maxEntries: number, maxT: number): Map<string, CleanAnswer> | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
@@ -225,7 +262,7 @@ export function cleanAnswers(idx: ExamIndex, raw: unknown, maxEntries: number, m
   for (const [qid, a] of entries) {
     const e = idx.byId.get(qid);
     if (!e || !a || typeof a !== 'object') continue;
-    const selected = typeof a.selected === 'string' && e.labels.has(a.selected) ? a.selected : null;
+    const selected = typeof a.selected === 'string' ? cleanSelected(e, a.selected) : null;
     const t = Math.min(maxT, Math.max(0, Math.round(Number(a.t) || 0)));
     out.set(qid, { selected, marked: a.marked === true, visited: a.visited === true || selected !== null, t });
   }
@@ -255,16 +292,60 @@ export async function writeAnswers(attemptId: string, clean: Map<string, CleanAn
   if (ops.length) await prisma.$transaction(ops);
 }
 
-export function gradeAnswers(idx: ExamIndex, negativeMarks: number, rows: Array<{ questionId: string; selected: string | null }>) {
+export type Verdict = 'right' | 'wrong' | 'partial' | 'skipped';
+
+/**
+ * Marks for one answer. The same function scores students, results and analytics.
+ *  - Single answer: right = full marks, wrong = minus the negative marks.
+ *  - Multiple correct: exactly the right set = full marks. A wrong option anywhere = minus the negative
+ *    marks. A correct subset with nothing wrong = marks x picked / total correct when partial marking is
+ *    on (a "partial"), otherwise it counts as wrong.
+ *  - Numerical: within the tolerance = full marks; wrong costs nothing (no negative marking).
+ */
+export function evaluate(
+  e: IndexEntry,
+  selected: string | null | undefined,
+  negativeMarks: number,
+  partialMarking: boolean
+): { verdict: Verdict; marks: number } {
+  if (!selected) return { verdict: 'skipped', marks: 0 };
+  const marks = e.q.marks;
+
+  if (e.kind === 'NAT') {
+    const v = Number(selected);
+    const ok = Number.isFinite(v) && Math.abs(v - (e.answer as number)) <= (e.tolerance || 0) + 1e-9;
+    return ok ? { verdict: 'right', marks } : { verdict: 'wrong', marks: 0 };
+  }
+
+  if (e.kind === 'MSQ') {
+    const picked = new Set(selected.split(','));
+    const anyWrong = Array.from(picked).some(l => !e.correctSet.has(l));
+    if (anyWrong) return { verdict: 'wrong', marks: -negativeMarks };
+    if (picked.size === e.correctSet.size) return { verdict: 'right', marks };
+    if (partialMarking) return { verdict: 'partial', marks: round2((marks * picked.size) / e.correctSet.size) };
+    return { verdict: 'wrong', marks: -negativeMarks };
+  }
+
+  return selected === e.correct ? { verdict: 'right', marks } : { verdict: 'wrong', marks: -negativeMarks };
+}
+
+export function gradeAnswers(
+  idx: ExamIndex,
+  negativeMarks: number,
+  rows: Array<{ questionId: string; selected: string | null }>,
+  partialMarking = false
+) {
   const chosen = new Map(rows.map(r => [r.questionId, r.selected]));
-  let score = 0, correct = 0, wrong = 0, skipped = 0;
+  let score = 0, correct = 0, wrong = 0, partial = 0, skipped = 0;
   idx.byId.forEach((e, qid) => {
-    const sel = chosen.get(qid);
-    if (!sel) skipped++;
-    else if (sel === e.correct) { correct++; score += e.q.marks; }
-    else { wrong++; score -= negativeMarks; }
+    const r = evaluate(e, chosen.get(qid), negativeMarks, partialMarking);
+    score += r.marks;
+    if (r.verdict === 'right') correct++;
+    else if (r.verdict === 'wrong') wrong++;
+    else if (r.verdict === 'partial') partial++;
+    else skipped++;
   });
-  return { score: round2(score), correct, wrong, skipped };
+  return { score: round2(score), correct, wrong, partial, skipped };
 }
 
 // ─────────────────────────────────────────
@@ -294,7 +375,7 @@ export async function finalizeAttempt(attemptId: string, input?: { answers?: unk
   }
 
   const rows = await prisma.answer.findMany({ where: { attemptId: attempt.id } });
-  const g = gradeAnswers(idx, attempt.test.negativeMarks, rows);
+  const g = gradeAnswers(idx, attempt.test.negativeMarks, rows, attempt.test.partialMarking);
   await prisma.attempt.updateMany({
     where: { id: attempt.id, status: 'IN_PROGRESS' },
     data: { status: 'SUBMITTED', submittedAt: new Date(Math.min(now, deadline)), score: g.score },
@@ -307,6 +388,69 @@ export async function recordTabSwitches(attemptId: string, count: unknown) {
   const n = Math.min(500, Math.max(0, Math.floor(Number(count) || 0)));
   if (n <= 0) return;
   await prisma.attempt.updateMany({ where: { id: attemptId, tabSwitches: { lt: n } }, data: { tabSwitches: n } });
+}
+
+// ─────────────────────────────────────────
+// Teacher controls on exam day
+// ─────────────────────────────────────────
+
+export const MAX_EXTEND_MIN = 180;
+
+/**
+ * Start this student over: answers wiped, fresh timer (the full duration, even past closesAt), new
+ * shuffle, new token (so any device still open stops saving). Works on running and submitted attempts.
+ * The student reopens the link and enters the same name and roll number to continue.
+ */
+export async function resetAttempt(attemptId: string, test: TestMeta) {
+  const idx = await getExam(test);
+  const now = Date.now();
+  await prisma.$transaction([
+    prisma.answer.deleteMany({ where: { attemptId } }),
+    prisma.attempt.update({
+      where: { id: attemptId },
+      data: {
+        status: 'IN_PROGRESS',
+        token: newToken(),
+        startedAt: new Date(now),
+        deadlineAt: new Date(now + test.durationMin * 60000),
+        submittedAt: null,
+        score: null,
+        tabSwitches: 0,
+        order: buildOrder(idx, test) as unknown as Prisma.InputJsonValue,
+      },
+    }),
+  ]);
+}
+
+/** Adds minutes to a running attempt's remaining time. Returns false if it is not running any more. */
+export async function extendAttempt(attemptId: string, minutes: number): Promise<boolean> {
+  const a = await prisma.attempt.findUnique({ where: { id: attemptId }, select: { id: true, status: true, deadlineAt: true } });
+  if (!a || a.status !== 'IN_PROGRESS') return false;
+  const base = Math.max(a.deadlineAt.getTime(), Date.now());
+  const r = await prisma.attempt.updateMany({
+    where: { id: a.id, status: 'IN_PROGRESS' },
+    data: { deadlineAt: new Date(base + minutes * 60000) },
+  });
+  return r.count === 1;
+}
+
+/** Adds minutes to everyone still writing (their time has not run out yet). Returns how many. */
+export async function extendAllRunning(testId: string, minutes: number): Promise<number> {
+  const now = Date.now();
+  const running = await prisma.attempt.findMany({
+    where: { testId, status: 'IN_PROGRESS', deadlineAt: { gte: new Date(now - SUBMIT_GRACE_SEC * 1000) } },
+    select: { id: true, deadlineAt: true },
+  });
+  if (!running.length) return 0;
+  const results = await prisma.$transaction(
+    running.map(a =>
+      prisma.attempt.updateMany({
+        where: { id: a.id, status: 'IN_PROGRESS' },
+        data: { deadlineAt: new Date(Math.max(a.deadlineAt.getTime(), now) + minutes * 60000) },
+      })
+    )
+  );
+  return results.reduce((n, r) => n + r.count, 0);
 }
 
 /** If this attempt ran out of time, submit it now (lazy auto-submit). Returns the fresh row when it did. */
@@ -465,7 +609,7 @@ export async function resultPayload(
 ) {
   const idx = await getExam(test);
   const rows = await prisma.answer.findMany({ where: { attemptId: attempt.id } });
-  const g = gradeAnswers(idx, test.negativeMarks, rows);
+  const g = gradeAnswers(idx, test.negativeMarks, rows, test.partialMarking);
   const out: Record<string, unknown> = {
     submitted: true,
     title: test.title,
@@ -480,6 +624,7 @@ export async function resultPayload(
       totalMarks: test.totalMarks,
       correct: g.correct,
       wrong: g.wrong,
+      partial: g.partial,
       skipped: g.skipped,
       negativeMarks: test.negativeMarks,
       timeTakenSec: attempt.submittedAt ? Math.max(0, Math.round((attempt.submittedAt.getTime() - attempt.startedAt.getTime()) / 1000)) : null,

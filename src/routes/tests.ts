@@ -14,7 +14,7 @@ import { prisma } from '../utils/prisma';
 import { authenticate } from '../middleware/authenticate';
 import { asyncHandler } from '../middleware/asyncHandler';
 import { logger } from '../utils/logger';
-import { TEST_META } from '../services/examService';
+import { TEST_META, resetAttempt, extendAttempt, extendAllRunning, expireIfDue, MAX_EXTEND_MIN } from '../services/examService';
 import { buildResults, resultsCsv } from '../services/resultsService';
 
 const router = Router();
@@ -43,6 +43,8 @@ interface RawOption { label?: string; text?: string; isCorrect?: boolean; image?
 interface RawQuestion {
   id?: string; number?: number | string; type?: string; text?: string; marks?: number;
   options?: RawOption[]; images?: unknown[]; tables?: unknown[];
+  multi?: boolean;                                        // MCQ with more than one correct option
+  numeric?: { answer?: unknown; tolerance?: unknown };    // NUMERICAL: the answer and an optional +/- tolerance
 }
 interface RawSection { id?: string; title?: string; description?: string; questions?: RawQuestion[] }
 
@@ -59,6 +61,7 @@ export function buildSnapshot(
   let counter = 1;
   let totalMarks = 0;
   let totalQuestions = 0;
+  const kinds = { scq: 0, msq: 0, nat: 0 };
 
   sections.forEach((s, si) => {
     const sectionTitle = (s.title || `Section ${si + 1}`).toString();
@@ -67,26 +70,60 @@ export function buildSnapshot(
     for (const q of Array.isArray(s.questions) ? s.questions : []) {
       totalQuestions++;
       const label = `Q${q.number ?? totalQuestions}`;
-      if (q.type !== 'MCQ') {
-        skipped.push({ question: label, section: sectionTitle, reason: 'Not a multiple-choice question' });
+      const isNumerical = q.type === 'NUMERICAL';
+      if (q.type !== 'MCQ' && !isNumerical) {
+        skipped.push({ question: label, section: sectionTitle, reason: 'Not a multiple-choice, multiple-correct or numerical question' });
         continue;
       }
-      const options = (Array.isArray(q.options) ? q.options : []).filter(
-        o => (typeof o?.text === 'string' && o.text.trim()) || o?.image?.url
-      );
-      if (options.length < 2) {
-        skipped.push({ question: label, section: sectionTitle, reason: 'Needs at least 2 options' });
-        continue;
+
+      let kind: 'SCQ' | 'MSQ' | 'NAT' = 'SCQ';
+      let options: RawOption[] = [];
+      let nat: { answer: number; tolerance: number } | null = null;
+
+      if (isNumerical) {
+        const NUM = /^\s*-?(\d+\.?\d*|\.\d+)\s*$/;
+        const raw = q.numeric?.answer;
+        const answer = typeof raw === 'number' ? raw : typeof raw === 'string' && NUM.test(raw) ? Number(raw) : NaN;
+        if (!Number.isFinite(answer)) {
+          skipped.push({ question: label, section: sectionTitle, reason: 'No numerical answer set' });
+          continue;
+        }
+        const rawTol = q.numeric?.tolerance;
+        const tolerance =
+          rawTol === undefined || rawTol === null || rawTol === '' ? 0
+          : typeof rawTol === 'number' ? rawTol
+          : NUM.test(String(rawTol)) ? Number(rawTol) : NaN;
+        if (!Number.isFinite(tolerance) || tolerance < 0) {
+          skipped.push({ question: label, section: sectionTitle, reason: 'Tolerance must be a number, 0 or more' });
+          continue;
+        }
+        kind = 'NAT';
+        nat = { answer, tolerance };
+      } else {
+        options = (Array.isArray(q.options) ? q.options : []).filter(
+          o => (typeof o?.text === 'string' && o.text.trim()) || o?.image?.url
+        );
+        if (options.length < 2) {
+          skipped.push({ question: label, section: sectionTitle, reason: 'Needs at least 2 options' });
+          continue;
+        }
+        const correct = options.filter(o => o.isCorrect === true).length;
+        if (q.multi === true) {
+          if (correct < 1) {
+            skipped.push({ question: label, section: sectionTitle, reason: 'No correct option marked' });
+            continue;
+          }
+          kind = 'MSQ';
+        } else if (correct !== 1) {
+          skipped.push({
+            question: label,
+            section: sectionTitle,
+            reason: correct === 0 ? 'No correct option marked' : 'More than one correct option marked (turn on Multiple correct)',
+          });
+          continue;
+        }
       }
-      const correct = options.filter(o => o.isCorrect === true).length;
-      if (correct !== 1) {
-        skipped.push({
-          question: label,
-          section: sectionTitle,
-          reason: correct === 0 ? 'No correct option marked' : 'More than one correct option marked',
-        });
-        continue;
-      }
+      if (kind === 'SCQ') kinds.scq++; else if (kind === 'MSQ') kinds.msq++; else kinds.nat++;
 
       let id = typeof q.id === 'string' && q.id ? q.id : `q_${counter}`;
       if (usedIds.has(id)) id = `q_${counter}_${usedIds.size}`;
@@ -100,13 +137,19 @@ export function buildSnapshot(
         number: counter++,
         text: typeof q.text === 'string' ? q.text : '',
         marks,
-        // labels are re-lettered a, b, c... so the stored answer is always one of them
-        options: options.map((o, i) => ({
-          label: String.fromCharCode(97 + i),
-          text: typeof o.text === 'string' ? o.text : '',
-          isCorrect: o.isCorrect === true,
-          ...(o.image?.url ? { image: o.image } : {}),
-        })),
+        // kind is left out for ordinary single-answer MCQs, so they look exactly as before
+        ...(kind !== 'SCQ' ? { kind } : {}),
+        ...(nat
+          ? { answer: nat.answer, tolerance: nat.tolerance }
+          : {
+              // labels are re-lettered a, b, c... so the stored answer is always one of them
+              options: options.map((o, i) => ({
+                label: String.fromCharCode(97 + i),
+                text: typeof o.text === 'string' ? o.text : '',
+                isCorrect: o.isCorrect === true,
+                ...(o.image?.url ? { image: o.image } : {}),
+              })),
+            }),
         ...(Array.isArray(q.images) && q.images.length ? { images: q.images } : {}),
         ...(Array.isArray(q.tables) && q.tables.length ? { tables: q.tables } : {}),
       });
@@ -137,6 +180,7 @@ export function buildSnapshot(
     totalQuestions,
     totalMarks,
     skipped,
+    kinds,
   };
 }
 
@@ -144,7 +188,7 @@ const TEST_LIST_FIELDS = {
   id: true, code: true, paperId: true, title: true, instructions: true, durationMin: true,
   marksPerQuestion: true, negativeMarks: true, shuffleQuestions: true, shuffleOptions: true,
   opensAt: true, closesAt: true, showResult: true, showAnswers: true, onePerRoll: true,
-  status: true, totalMarks: true, questionCount: true, createdAt: true, updatedAt: true,
+  status: true, totalMarks: true, questionCount: true, partialMarking: true, createdAt: true, updatedAt: true,
 } as const;
 
 function parseDate(v: unknown): Date | null | undefined {
@@ -207,10 +251,10 @@ router.post(
     const paper = await prisma.paper.findFirst({ where: { id: req.body.paperId, userId } });
     if (!paper) return res.status(404).json({ success: false, error: 'Paper not found' });
 
-    const { usable, totalQuestions, skipped } = buildSnapshot(paper, 1);
+    const { usable, totalQuestions, skipped, kinds } = buildSnapshot(paper, 1);
     res.json({
       success: true,
-      data: { title: paper.title, usable, totalQuestions, skipped: skipped.slice(0, 50), skippedCount: skipped.length },
+      data: { title: paper.title, usable, totalQuestions, kinds, skipped: skipped.slice(0, 50), skippedCount: skipped.length },
     });
   })
 );
@@ -237,6 +281,7 @@ router.post(
     body('showResult').optional().isBoolean(),
     body('showAnswers').optional().isBoolean(),
     body('onePerRoll').optional().isBoolean(),
+    body('partialMarking').optional().isBoolean(),
   ],
   asyncHandler(async (req: Request, res: Response) => {
     const errors = validationResult(req);
@@ -255,7 +300,7 @@ router.post(
     if (usable === 0) {
       return res.status(400).json({
         success: false,
-        error: 'This paper has no multiple-choice questions with exactly one correct option marked.',
+        error: 'This paper has no questions that can be asked online. Use multiple-choice questions with the correct option ticked, or numerical questions with an answer set.',
         skipped: skipped.slice(0, 50),
       });
     }
@@ -293,6 +338,7 @@ router.post(
             showResult: b.showResult !== false,
             showAnswers: b.showAnswers === true,
             onePerRoll: b.onePerRoll !== false,
+            partialMarking: b.partialMarking === true,
             snapshot: JSON.parse(JSON.stringify(snapshot)), // plain JSON (drops undefined fields)
             totalMarks,
             questionCount: usable,
@@ -412,6 +458,83 @@ router.get(
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${slug}-results.csv"`);
     res.send(csv);
+  })
+);
+
+// ─────────────────────────────────────────
+// EXAM-DAY CONTROLS (teacher only, own tests only)
+// POST   /api/tests/:id/attempts/:attemptId/reset    start this student over
+// DELETE /api/tests/:id/attempts/:attemptId          remove this attempt completely
+// POST   /api/tests/:id/attempts/:attemptId/extend   { minutes } add time to a running attempt
+// POST   /api/tests/:id/extend-all                   { minutes } add time to everyone still writing
+// ─────────────────────────────────────────
+
+function readMinutes(req: Request, res: Response): number | null {
+  const m = Math.floor(Number(req.body?.minutes));
+  if (!Number.isFinite(m) || m < 1 || m > MAX_EXTEND_MIN) {
+    res.status(400).json({ success: false, error: `Minutes must be between 1 and ${MAX_EXTEND_MIN}.` });
+    return null;
+  }
+  return m;
+}
+
+async function ownAttempt(req: Request, res: Response) {
+  const test = await ownTestMeta(req, res);
+  if (!test) return null;
+  const attempt = await prisma.attempt.findFirst({
+    where: { id: req.params.attemptId, testId: test.id },
+    select: { id: true, status: true, deadlineAt: true },
+  });
+  if (!attempt) { res.status(404).json({ success: false, error: 'Attempt not found' }); return null; }
+  return { test, attempt };
+}
+
+router.post(
+  '/:id/attempts/:attemptId/reset',
+  asyncHandler(async (req: Request, res: Response) => {
+    const own = await ownAttempt(req, res);
+    if (!own) return;
+    await resetAttempt(own.attempt.id, own.test);
+    res.json({ success: true });
+  })
+);
+
+router.delete(
+  '/:id/attempts/:attemptId',
+  asyncHandler(async (req: Request, res: Response) => {
+    const own = await ownAttempt(req, res);
+    if (!own) return;
+    await prisma.attempt.deleteMany({ where: { id: own.attempt.id, testId: own.test.id } });
+    res.json({ success: true });
+  })
+);
+
+router.post(
+  '/:id/attempts/:attemptId/extend',
+  asyncHandler(async (req: Request, res: Response) => {
+    const minutes = readMinutes(req, res);
+    if (minutes === null) return;
+    const own = await ownAttempt(req, res);
+    if (!own) return;
+    // An attempt whose time already ran out counts as submitted, even if the cron has not caught up.
+    const closed = await expireIfDue(own.attempt);
+    const ok = !closed && (await extendAttempt(own.attempt.id, minutes));
+    if (!ok) {
+      res.status(409).json({ success: false, error: 'This student has already submitted. Use Reset to let them start over.' });
+      return;
+    }
+    res.json({ success: true });
+  })
+);
+
+router.post(
+  '/:id/extend-all',
+  asyncHandler(async (req: Request, res: Response) => {
+    const minutes = readMinutes(req, res);
+    if (minutes === null) return;
+    const test = await ownTestMeta(req, res);
+    if (!test) return;
+    res.json({ success: true, data: { extended: await extendAllRunning(test.id, minutes) } });
   })
 );
 
