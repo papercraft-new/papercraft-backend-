@@ -117,6 +117,9 @@ app.use(compression({
   },
 }));
 app.use(morgan('combined', { stream: { write: (msg) => logger.info(msg.trim()) } }));
+// Papers can be big (160 questions with figures and equations), so only the papers routes accept more.
+// The first JSON parser to run wins, so this must stay above the general one.
+app.use('/api/papers', express.json({ limit: '30mb' }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 

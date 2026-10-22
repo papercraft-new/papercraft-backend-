@@ -253,7 +253,7 @@ const professionalCss = `*{margin:0;padding:0;box-sizing:border-box}body{font-fa
 // exactly the same HTML as before.
 
 /** Limits enforced by the editor and by the API (same numbers on both sides). */
-export const IMAGE_LIMITS = { perQuestion: 5, perPaper: 100 } as const;
+export const IMAGE_LIMITS = { perQuestion: 5, perPaper: 200 } as const;
 
 /** Question images + option images across the whole paper. */
 export function countPaperImages(sections: RenderSection[] | undefined): number {
@@ -486,7 +486,7 @@ export function getMatchLimitProblem(sections: RenderSection[] | undefined): str
 // \$ is a literal dollar sign. Nothing is stored beyond the text, so saved papers keep working,
 // and text without a "$" produces exactly the same HTML as before.
 
-export const MATH_LIMITS = { maxChars: 500, perPaper: 300 } as const;
+export const MATH_LIMITS = { maxChars: 500, perPaper: 800 } as const;
 export const KATEX_VERSION = '0.16.11';
 export const KATEX_CSS_URL = `https://cdn.jsdelivr.net/npm/katex@${KATEX_VERSION}/dist/katex.min.css`;
 
@@ -586,8 +586,9 @@ export function countPaperMath(sections: RenderSection[] | undefined): number {
 
 /** null when the paper is within the equation limit, otherwise a message fit to show the teacher. */
 export function getMathLimitProblem(sections: RenderSection[] | undefined): string | null {
-  return countPaperMath(sections) > MATH_LIMITS.perPaper
-    ? `A paper can have at most ${MATH_LIMITS.perPaper} equations.`
+  const total = countPaperMath(sections);
+  return total > MATH_LIMITS.perPaper
+    ? `A paper can have at most ${MATH_LIMITS.perPaper} equations (this one has ${total}).`
     : null;
 }
 
