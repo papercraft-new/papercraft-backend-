@@ -3,6 +3,7 @@ import { logger } from '../utils/logger';
 import type { Section, Question, QuestionTable, QuestionMatch, FigureBox } from '../types';
 import { splitMath, TABLE_LIMITS, MATCH_LIMITS } from './paperRenderer';
 import { smartExtractionEnabled, smartExtractJson } from './smartExtract';
+import { readKeyEntries, type KeyEntry } from './answerKey';
 
 // ─────────────────────────────────────────
 // MAIN OCR PIPELINE
@@ -21,6 +22,7 @@ export async function processOcrJob(
   processingMs: number;
   confidence: number;
   warnings: string[];
+  keyEntries?: KeyEntry[]; // answer key entries read from the file; applied once all files are merged
 }> {
   const startTime = Date.now();
   const warnings: string[] = [];
@@ -37,10 +39,15 @@ export async function processOcrJob(
       const json = await smartExtractJson(inputType, content);
       const { sections } = parseAiResponse(json, '', true);
       const smartQuestions = sections.reduce((sum, sec) => sum + sec.questions.length, 0);
-      if (smartQuestions === 0) throw new Error('Smart extraction found no questions');
+      // a key that came in the same file as questions belongs to those questions; a key-only file stays general
+      const keyEntries = readKeyEntries(json).map(e => (smartQuestions > 0 ? { ...e, file: sourceIndex } : e));
+      // A file that holds only an answer key has no questions, and that is a success, not a failure.
+      if (smartQuestions === 0 && keyEntries.length === 0) throw new Error('Smart extraction found no questions');
+      if (smartQuestions === 0) warnings.push(`This file holds an answer key (${keyEntries.length} answers) and no questions.`);
       sections.forEach(sec =>
         sec.questions.forEach(q => {
           if (q.figureBoxes) q.figureBoxes = q.figureBoxes.map(f => ({ ...f, sourceIndex }));
+          q.sourceFile = sourceIndex; // removed again once an answer key has been matched
         })
       );
       const smartText = sections
@@ -57,6 +64,7 @@ export async function processOcrJob(
         sectionsFound: sections.length,
         processingMs,
         warnings,
+        ...(keyEntries.length ? { keyEntries } : {}),
       };
     } catch (err) {
       logger.warn('Smart extraction failed, using the standard OCR pipeline:', err);
@@ -102,6 +110,24 @@ export async function processOcrJob(
 // ─────────────────────────────────────────
 // EXTRACT TEXT FROM PDF (Claude native PDF support)
 // ─────────────────────────────────────────
+/** Reads the text layer of a PDF on this server (free, and it never cuts a long paper short). */
+async function localPdfText(buf: Buffer): Promise<{ text: string; pages: number } | null> {
+  try {
+    const mod: any = await import('pdf-parse');
+    if (!mod?.PDFParse) return null; // pdf-parse 2.x exports a PDFParse class (there is no default function)
+    const parser = new mod.PDFParse({ data: new Uint8Array(buf) });
+    try {
+      const r = await parser.getText();
+      return { text: String(r?.text || ''), pages: Number(r?.total) || 0 };
+    } finally {
+      try { await parser.destroy?.(); } catch { /* ignore */ }
+    }
+  } catch (err) {
+    logger.warn('Local PDF text extraction failed:', err);
+    return null;
+  }
+}
+
 async function extractTextFromPdf(pdfUrl: string): Promise<string> {
   logger.info('Starting PDF text extraction...');
 
@@ -114,6 +140,15 @@ async function extractTextFromPdf(pdfUrl: string): Promise<string> {
   const arrayBuffer = await response.arrayBuffer();
   const base64Pdf = Buffer.from(arrayBuffer).toString('base64');
   logger.info(`PDF downloaded: ${base64Pdf.length} base64 chars`);
+
+  // A long typeset PDF: its own text layer is complete, while Claude's reply below is capped at 8000 tokens
+  // (about half of a 160-question paper).
+  const local = await localPdfText(Buffer.from(arrayBuffer));
+  const hasTextLayer = !!local && local.pages > 0 && local.text.replace(/\s/g, '').length / local.pages >= 400;
+  if (local && hasTextLayer && local.pages > 3) {
+    logger.info(`PDF text layer used: ${local.pages} pages, ${local.text.length} chars`);
+    return local.text;
+  }
 
   // Strategy 1: Claude native PDF document support
   if (process.env.ANTHROPIC_API_KEY) {
@@ -186,15 +221,10 @@ Return ONLY the raw extracted text, nothing else.`,
   // Strategy 2: Extract pages as images and run image OCR
   logger.info('Falling back to page-by-page image OCR...');
   try {
-    // Use pdfjs-dist to render pages if available, else try pdf2pic
-    const pdfParse = await import('pdf-parse').catch(() => null);
-    if (pdfParse) {
-      const pdfBuffer = Buffer.from(arrayBuffer);
-      const data = await pdfParse.default(pdfBuffer);
-      if (data.text && data.text.trim().length > 20) {
-        logger.info(`pdf-parse extracted: ${data.text.length} chars`);
-        return data.text;
-      }
+    const fallback = local ?? (await localPdfText(Buffer.from(arrayBuffer)));
+    if (fallback && fallback.text.trim().length > 20) {
+      logger.info(`pdf-parse extracted: ${fallback.text.length} chars`);
+      return fallback.text;
     }
   } catch (err) {
     logger.warn('pdf-parse fallback failed:', err);
@@ -732,28 +762,40 @@ async function structureWithClaude(
 async function structureText(
   rawText: string
 ): Promise<{ cleanedText: string; sections: Section[] }> {
+  // How many questions does the paper itself number? An AI answer that has far fewer was cut short.
+  const expected = countQuestionMarkers(cleanPaperText(rawText));
+  const AI_MAX_QUESTIONS = 45; // the AI answers below are capped at 8000 tokens: about this many questions
+  const count = (r: { sections: Section[] }) => r.sections.reduce((n, sec) => n + sec.questions.length, 0);
+  const complete = (r: { sections: Section[] }) => expected < 10 || count(r) >= Math.floor(expected * 0.9);
+  const tooLong = expected > AI_MAX_QUESTIONS;
+
+  if (tooLong) {
+    logger.info(`Long paper (${expected} numbered questions): using the rule-based parser, the AI answer would be cut short.`);
+  }
 
   // Try Claude first (best quality)
-  if (process.env.ANTHROPIC_API_KEY) {
+  if (!tooLong && process.env.ANTHROPIC_API_KEY) {
     try {
       const result = await structureWithClaude(rawText);
-      if (result.sections.length > 0) {
+      if (result.sections.length > 0 && complete(result)) {
         logger.info(`Claude structured: ${result.sections.length} sections`);
         return result;
       }
+      if (result.sections.length > 0) logger.warn(`Claude found ${count(result)} of ${expected} questions: not using it.`);
     } catch (err) {
       logger.warn('Claude failed:', err);
     }
   }
 
   // Try Mistral fallback
-  if (process.env.MISTRAL_API_KEY) {
+  if (!tooLong && process.env.MISTRAL_API_KEY) {
     try {
       const result = await structureWithMistral(rawText);
-      if (result.sections.length > 0) {
+      if (result.sections.length > 0 && complete(result)) {
         logger.info(`Mistral structured: ${result.sections.length} sections`);
         return result;
       }
+      if (result.sections.length > 0) logger.warn(`Mistral found ${count(result)} of ${expected} questions: not using it.`);
     } catch (err) {
       logger.warn('Mistral failed:', err);
     }
@@ -1205,6 +1247,10 @@ function normalizeQuestion(q: Record<string, unknown>, index: number, sectionTit
   const match = sanitizeMatch(q.match);
   const figureBoxes = sanitizeFigures(q.figures ?? q.figureBoxes);
   const type = options.length >= 2 ? 'MCQ' : match ? 'MATCH_FOLLOWING' : isBlankQuestion ? 'FILL_IN_BLANK' : guessed;
+  // printed number and printed answer: only used to match an answer key, and removed again afterwards
+  const printedNo = Math.floor(Number(q.no));
+  const sourceNo = Number.isFinite(printedNo) && printedNo > 0 && printedNo < 10000 ? printedNo : undefined;
+  const printedAnswer = typeof q.answer === 'string' || typeof q.answer === 'number' ? String(q.answer).trim().slice(0, 40) : '';
 
   return {
     id: (q.id as string) || uuidv4(),
@@ -1219,6 +1265,8 @@ function normalizeQuestion(q: Record<string, unknown>, index: number, sectionTit
     ...(tables ? { tables } : {}),
     ...(match ? { match } : {}),
     ...(figureBoxes ? { figureBoxes } : {}),
+    ...(sourceNo ? { sourceNo } : {}),
+    ...(printedAnswer ? { answer: printedAnswer } : {}),
   };
 }
 function renumberQuestionsPerSection(sections: Section[]): Section[] {
@@ -1234,12 +1282,104 @@ function renumberQuestionsPerSection(sections: Section[]): Section[] {
 // RULE-BASED FALLBACK PARSER
 // ─────────────────────────────────────────
 
-function ruleBasedParse(text: string): { cleanedText: string; sections: Section[] } {
-  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+const QUESTION_START = /^(?:Q\.?\s*)?\d{1,3}[.)]\s+\S/i;
+// "12. text", "12." alone on its line, or "12." glued to a vector arrow ("12.⃗ A and ...")
+const DOT_QUESTION_START = /^\d{1,3}\.(?:\s+\S|[\u0300-\u036f\u20d0-\u20ff]|$)/;
+
+/**
+ * Removes what is not part of any question: page numbers ("Page 3", also glued to the next page's header),
+ * a header that repeats on many pages, and the answer key at the end of the paper.
+ */
+function cleanPaperText(text: string): string {
+  let lines = text
+    .replace(/\r/g, '')
+    .split('\n')
+    .map(l =>
+      l
+        .replace(/\t+/g, ' ')
+        .replace(/\s*([\u20d0-\u20ff])\s*([A-Za-z])/g, ' $2$1') // PDF readers put a vector arrow before its letter: "⃗ V" -> "V⃗"
+        .trim()
+    )
+    .filter(l => l && !/^[\u0300-\u036f\u20d0-\u20ff\s]+$/.test(l)); // a lone arrow from a figure label
+
+  lines = lines
+    .filter(l => !/^--\s*\d+\s+of\s+\d+\s*--$/.test(l)) // "-- 4 of 17 --" page markers some PDF readers insert
+    .map(l => l.replace(/^Page\s*\d+\s*/i, '').replace(/\s*Page\s*\d+$/i, '').trim())
+    .filter(Boolean);
+
+  // a header or footer line repeated on at least 3 pages (long enough not to be a maths fragment)
+  const freq = new Map<string, number>();
+  for (const l of lines) freq.set(l.toLowerCase(), (freq.get(l.toLowerCase()) || 0) + 1);
+  lines = lines.filter(l => !(l.length >= 12 && (freq.get(l.toLowerCase()) || 0) >= 3 && !QUESTION_START.test(l)));
+
+  // the answer key after the last question
+  const firstQ = lines.findIndex(l => QUESTION_START.test(l));
+  if (firstQ >= 0) {
+    const keyAt = lines.findIndex((l, i) => i > firstQ && /^(?:KEY\s*SHEET|ANSWER\s*KEY|ANSWERS?|KEY)\s*:?$/i.test(l));
+    if (keyAt > 0) lines = lines.slice(0, keyAt);
+  }
+  return lines.join('\n');
+}
+
+/** How many questions the paper numbers (1., 2., ... or Q1 ...). Used to notice an AI answer that stopped early. */
+function countQuestionMarkers(cleaned: string): number {
+  const dot = new Set<number>();
+  const paren = new Set<number>();
+  const q = new Set<number>();
+  for (const l of cleaned.split('\n')) {
+    let m: RegExpMatchArray | null;
+    if ((m = l.match(/^(\d{1,3})\.(?:\s+\S|[\u0300-\u036f\u20d0-\u20ff]|$)/))) dot.add(+m[1]);
+    else if ((m = l.match(/^(\d{1,3})\)\s+\S/))) paren.add(+m[1]);
+    if ((m = l.match(/^Q\.?\s*(\d{1,3})\b/i))) q.add(+m[1]);
+  }
+  // "1) 2) 3) 4)" in a paper that numbers questions "1." are options: only count them when there are many
+  return Math.max(dot.size, paren.size > 20 ? paren.size : 0, q.size);
+}
+
+/**
+ * Splits "1) symmetric 2) reflexive 3) transitive 4) an equivalence" into its options. A marker counts only
+ * when it is the next number in order, stands alone after a space, and is outside any brackets, so
+ * "{(1, 4)} 2) {(2, 4)}" is read as two options, not five.
+ */
+function splitNumberedOptions(text: string, firstExpected = 1): Array<{ n: number; text: string; start: number }> {
+  const marks: Array<{ n: number; start: number; end: number }> = [];
+  let expected = firstExpected;
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    const m = text.slice(i).match(/^\(?(\d)\)(?=\s|$|[\u0300-\u036f\u20d0-\u20ff])/);
+    if (m && (i === 0 || /\s/.test(text[i - 1])) && depth === 0 && Number(m[1]) === expected) {
+      marks.push({ n: expected, start: i, end: i + m[0].length });
+      expected++;
+      i += m[0].length - 1;
+      continue;
+    }
+    const ch = text[i];
+    if (ch === '(' || ch === '[' || ch === '{') depth++;
+    else if (ch === ')' || ch === ']' || ch === '}') depth = Math.max(0, depth - 1);
+  }
+  return marks.map((mk, idx) => ({
+    n: mk.n,
+    start: mk.start,
+    text: text.slice(mk.end, idx + 1 < marks.length ? marks[idx + 1].start : text.length).trim(),
+  }));
+}
+
+type InlineSplit = ReturnType<typeof splitInlineOptions>;
+
+function ruleBasedParse(rawText: string): { cleanedText: string; sections: Section[] } {
+  const text = cleanPaperText(rawText);
+  const lines = text.split('\n');
   const sections: Section[] = [];
   let currentSection: Section | null = null;
   let currentQuestion: Question | null = null;
   let questionCounter = 0;
+  let lastNumber = 0;
+
+  // Questions numbered "1." AND options numbered "1) 2) 3) 4)" (EAMCET and most entrance papers): the "1)" lines
+  // are OPTIONS, not questions. Other papers keep the original behaviour.
+  const dotStyle =
+    lines.filter(l => DOT_QUESTION_START.test(l)).length >= 3 &&
+    lines.filter(l => /^\(?[1-4]\)\s+\S/.test(l)).length >= 3;
 
   const sectionPatterns = [
     /^SECTION[- ][A-Z]/i,
@@ -1248,22 +1388,33 @@ function ruleBasedParse(text: string): { cleanedText: string; sections: Section[
     /^Part [A-Z0-9]/i,
   ];
 
-  const questionPatterns = [
-    /^(\d+)[.)]\s+(.+)/,
-    /^Q\.?\s*(\d+)[.):]?\s*(.+)/i,
-    /^\((\d+)\)\s*(.+)/,
-  ];
+  // A short ALL-CAPS line right before a question is a heading ("PHYSICS", "MATHEMATICS – A")
+  const isHeading = (i: number) =>
+    /^[A-Z][A-Z .&,'’\-–]{2,60}$/.test(lines[i]) &&
+    (lines[i].match(/[A-Z]/g) || []).length >= 4 &&
+    QUESTION_START.test(lines[i + 1] || '');
 
-  const optionPatterns = [
+  const questionPatterns = dotStyle
+    ? [/^(\d+)\.(?:\s+|(?=[\u0300-\u036f\u20d0-\u20ff])|$)(.*)$/, /^Q\.?\s*(\d+)[.):]?\s*(.+)/i]
+    : [
+        /^(\d+)[.)]\s+(.+)/,
+        /^Q\.?\s*(\d+)[.):]?\s*(.+)/i,
+        /^\((\d+)\)\s*(.+)/,
+      ];
+
+  const allOptionPatterns = [
     /^\(([abcdABCD])\)\s*(.+)/,
     /^([abcdABCD])[.)]\s*(.+)/,
     /^([abcdABCD])\s*[-]\s*(.+)/,
   ];
+  const optionPatterns = dotStyle ? allOptionPatterns.slice(0, 2) : allOptionPatterns;
 
   const marksPattern = /[\[(](\d+)\s*(?:marks?)?[\])]/i;
 
-  for (const line of lines) {
-    if (sectionPatterns.some((p) => p.test(line))) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    if (sectionPatterns.some((p) => p.test(line)) || isHeading(i)) {
       if (currentQuestion && currentSection) {
         currentSection.questions.push(currentQuestion);
         currentSection.totalMarks += currentQuestion.marks;
@@ -1272,6 +1423,27 @@ function ruleBasedParse(text: string): { cleanedText: string; sections: Section[
       if (currentSection && currentSection.questions.length > 0) sections.push(currentSection);
       currentSection = { id: uuidv4(), title: line, totalMarks: 0, questions: [] };
       continue;
+    }
+
+    // "1) ... 2) ... 3) ... 4) ..." after a "1." question: options, on one line or one per line. The next
+    // option can also start in the middle of a line (a wrapped formula: ", n ∈ Z 2) 2nπ − ...").
+    if (dotStyle && currentQuestion && !DOT_QUESTION_START.test(line)) {
+      const expected = (currentQuestion.options?.length ?? 0) + 1;
+      const opts = splitNumberedOptions(line, expected);
+      if (opts.length > 0) {
+        if (!currentQuestion.options) currentQuestion.options = [];
+        const before = line.slice(0, opts[0].start).trim();
+        if (before) {
+          const own = currentQuestion.options;
+          if (own.length) own[own.length - 1].text = `${own[own.length - 1].text} ${before}`.trim();
+          else currentQuestion.text = `${currentQuestion.text} ${before}`.trim();
+        }
+        opts.forEach((o) => {
+          currentQuestion!.options!.push({ label: String.fromCharCode(96 + o.n), text: o.text, isCorrect: false });
+        });
+        currentQuestion.type = 'MCQ';
+        continue;
+      }
     }
 
     let isOption = false;
@@ -1295,25 +1467,42 @@ function ruleBasedParse(text: string): { cleanedText: string; sections: Section[
     for (const pattern of questionPatterns) {
       const match = line.match(pattern);
       if (match) {
+        const num = parseInt(match[1], 10);
+        // numbered "1." papers: only the next number starts a question, anything else is part of the text
+        if (dotStyle && !(num === 1 || (num > lastNumber && num <= lastNumber + 3))) continue;
+
         if (currentQuestion && currentSection) {
           currentSection.questions.push(currentQuestion);
           currentSection.totalMarks += currentQuestion.marks;
         }
 
-        const rawQText = (match[2] || match[1] || '').trim();
-        const marksMatch = rawQText.match(marksPattern);
+        const rawQText = (dotStyle ? match[2] ?? '' : match[2] || match[1] || '').trim();
+        const marksMatch = dotStyle ? null : rawQText.match(marksPattern);
         const marks = marksMatch ? parseInt(marksMatch[1]) : 1;
 
-        const split = splitInlineOptions(rawQText);
+        // (a)(b)(c)(d) on one line is only looked for in other papers: in formulas like "(a, b)R(c, d)" it misfires
+        let split: InlineSplit = dotStyle ? { questionText: rawQText, options: [] } : splitInlineOptions(rawQText);
+        if (dotStyle && split.options.length < 2) {
+          const nums = splitNumberedOptions(rawQText, 1);
+          if (nums.length >= 2 && nums[0].start > 0) {
+            split = {
+              questionText: rawQText.slice(0, nums[0].start).trim(),
+              options: nums.map((o) => ({ label: String.fromCharCode(96 + o.n), text: o.text, isCorrect: false })),
+            };
+          }
+        }
         const cleanText = split.options.length >= 2
           ? split.questionText
-          : rawQText.replace(marksPattern, '').trim();
+          : dotStyle
+            ? rawQText // a paper with no printed marks: a "(1)" in a formula is not a mark
+            : rawQText.replace(marksPattern, '').trim();
 
         if (!currentSection) {
           currentSection = { id: uuidv4(), title: 'Section A', totalMarks: 0, questions: [] };
         }
 
         questionCounter++;
+        lastNumber = num;
         currentQuestion = {
           id: uuidv4(),
           number: questionCounter,
@@ -1331,7 +1520,8 @@ function ruleBasedParse(text: string): { cleanedText: string; sections: Section[
     if (isQuestion) continue;
 
     if (currentQuestion) {
-      const split = splitInlineOptions(line);
+      // (a) (b) (c) (d) written on one line
+      const split: InlineSplit = dotStyle ? { questionText: line, options: [] } : splitInlineOptions(line);
       if (split.options.length >= 2) {
         if (!currentQuestion.options) currentQuestion.options = [];
         split.options.forEach((opt) => {
@@ -1340,6 +1530,11 @@ function ruleBasedParse(text: string): { cleanedText: string; sections: Section[
             currentQuestion!.type = 'MCQ';
           }
         });
+      } else if (dotStyle) {
+        // the next line of the same question or option (long questions and formulas wrap)
+        const opts = currentQuestion.options || [];
+        if (opts.length) opts[opts.length - 1].text = `${opts[opts.length - 1].text} ${line}`.trim();
+        else currentQuestion.text = `${currentQuestion.text} ${line}`.trim();
       }
     }
   }
@@ -1370,9 +1565,8 @@ function ruleBasedParse(text: string): { cleanedText: string; sections: Section[
       }],
     });
   }
-const renumberedSections = renumberQuestionsPerSection(sections);
-return { cleanedText: text, sections: renumberedSections };
-  
+  const renumberedSections = renumberQuestionsPerSection(sections);
+  return { cleanedText: text, sections: renumberedSections };
 }
 
 // ─────────────────────────────────────────

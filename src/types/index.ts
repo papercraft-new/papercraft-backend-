@@ -114,6 +114,11 @@ export interface Question {
   tables?: QuestionTable[];     // tables shown under the question text (max 3)
   match?: QuestionMatch;        // columns of a MATCH_FOLLOWING question (max 10 items per column)
   figureBoxes?: FigureBox[];    // extraction response only, never saved (see FigureBox)
+  multi?: boolean;              // MCQ with more than one correct option (online tests only)
+  numeric?: { answer: string; tolerance?: string }; // NUMERICAL: answer for online tests
+  sourceNo?: number;            // extraction only: the printed question number, used to match an answer key, never saved
+  answer?: string;              // extraction only: an answer printed next to the question, never saved
+  sourceFile?: number;          // extraction only: which uploaded file the question came from, never saved
   hint?: string;
   bloomLevel?: BloomLevel;
   difficulty?: DifficultyLevel;

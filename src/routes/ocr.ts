@@ -5,6 +5,7 @@ import { prisma } from '../utils/prisma';
 import { authenticate } from '../middleware/authenticate';
 import { asyncHandler } from '../middleware/asyncHandler';
 import { processOcrJob } from '../services/ocrService';
+import { applyAnswerKey, stripKeyFields, type KeyEntry } from '../services/answerKey';
 import { uploadToCloudinary } from '../utils/cloudinary';
 import { logger } from '../utils/logger';
 import type { Section } from '../types';
@@ -24,6 +25,7 @@ type OcrResult = {
   sectionsFound: number;
   processingMs: number;
   warnings?: string[];
+  keyEntries?: KeyEntry[]; // answer key entries read from this file
 };
 
 type SuccessfulOcrFileResult = OcrResult & {
@@ -107,7 +109,10 @@ router.post(
 
     try {
       const inputType = req.file.mimetype.includes('pdf') ? 'pdf' : 'image';
-      const result = await processOcrJob(inputType, fileUrl);
+      const { keyEntries, ...result } = await processOcrJob(inputType, fileUrl);
+      // If the paper came with an answer key (or prints answers beside the questions), tick the answers
+      const keyed = applyAnswerKey(result.sections, keyEntries);
+      result.sections = keyed.sections;
 
       await prisma.ocrJob.update({
         where: { id: job.id },
@@ -132,7 +137,7 @@ router.post(
         },
       });
 
-      res.json({ success: true, data: { jobId: job.id, ...result } });
+      res.json({ success: true, data: { jobId: job.id, ...result, answerKey: keyed.summary } });
 
     } catch (ocrErr: unknown) {
       const errorMessage = ocrErr instanceof Error ? ocrErr.message : 'OCR processing failed';
@@ -200,7 +205,7 @@ router.post(
               inputUrl: fileUrl,
               rawText: result.rawText,
               cleanedText: result.cleanedText,
-              extractedData: result.sections as object[],
+              extractedData: stripKeyFields(result.sections) as object[],
               confidence: result.confidence,
               questionsFound: result.questionsFound,
               sectionsFound: result.sectionsFound,
@@ -254,7 +259,9 @@ router.post(
     }
 
     // Merge sections from all files
-    const mergedSections = mergeAllSections(successful);
+    // The key can sit in any file (often the last one, or a file of its own), so it is matched once, after merging
+    const keyed = applyAnswerKey(mergeAllSections(successful), successful.flatMap(r => r.keyEntries || []));
+    const mergedSections = keyed.sections;
     const totalQuestions = mergedSections.reduce((sum, s) => sum + s.questions.length, 0);
 
     await prisma.usageLog.create({
@@ -276,6 +283,7 @@ router.post(
         filesSucceeded: successful.length,
         filesFailed: failed.length,
         sections: mergedSections,
+        answerKey: keyed.summary,
         questionsFound: totalQuestions,
         sectionsFound: mergedSections.length,
         rawText: successful.map(r => r.rawText).join('\n\n---\n\n'),
@@ -285,6 +293,7 @@ router.post(
   filename: r.filename,
   success: r.success,
   questionsFound: r.questionsFound || 0,
+  answerKeyEntries: (r as { keyEntries?: KeyEntry[] }).keyEntries?.length || 0,
   error: (r as { error?: string }).error,
 }))
 ,
