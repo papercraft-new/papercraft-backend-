@@ -355,6 +355,11 @@ function escAttr(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/** Like escAttr, plus line breaks. Used only on plain text, never on KaTeX output (its SVG root sign breaks if newlines are replaced). */
+function escAttrBr(s: string): string {
+  return escAttr(s).replace(/\n/g, '<br>');
+}
+
 /** An escaped src for an <img>, or '' when the URL is not a normal web or image data URL. */
 function safeImageSrc(url: unknown): string {
   if (typeof url !== 'string') return '';
@@ -407,7 +412,7 @@ function renderQuestionTables(tables: RenderTable[] | undefined, indentPx: numbe
       const headBase = `${cellBase};font-weight:bold;background:#eeeeee`;
       const row = (cells: string[], head: boolean) =>
         `<tr style="page-break-inside:avoid;break-inside:avoid">${cells
-          .map(c => `<${head ? 'th' : 'td'} style="${head ? headBase : cellBase}">${mathToHtml(c, escAttr).replace(/\n/g, '<br>')}</${head ? 'th' : 'td'}>`)
+          .map(c => `<${head ? 'th' : 'td'} style="${head ? headBase : cellBase}">${mathToHtml(c, escAttrBr)}</${head ? 'th' : 'td'}>`)
           .join('')}</tr>`;
       const hasHead = tableHasHeader(t);
       const thead = hasHead ? `<thead style="display:table-header-group">${row(grid[0], true)}</thead>` : '';
@@ -599,7 +604,7 @@ function renderQuestionMatch(m: RenderMatch | undefined, indentPx: number): stri
   const widths = c.answerBox ? [34, 16, 50] : [50, 50]; // bracket sits halfway between the two columns
   const itemStyle = 'padding:2px 8px 2px 1.9em;text-indent:-1.9em;vertical-align:top;overflow-wrap:anywhere;word-break:break-word';
   const item = (label: string, text: string | undefined) =>
-    text && text.trim() ? `<b>${label}</b>&nbsp;${mathToHtml(text, escAttr).replace(/\n/g, '<br>')}` : '&nbsp;';
+    text && text.trim() ? `<b>${label}</b>&nbsp;${mathToHtml(text, escAttrBr)}` : '&nbsp;';
   const headStyle = 'padding:2px 8px 3px 0;text-align:left;font-weight:bold;border-bottom:1px solid #333';
   const head =
     c.leftTitle || c.rightTitle
