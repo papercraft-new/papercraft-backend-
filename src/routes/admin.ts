@@ -269,4 +269,272 @@ router.get(
   })
 );
 
+// ─────────────────────────────────────────
+// ENGAGEMENT & FUNNEL (read-only)
+// GET /api/admin/engagement
+// Customers = users whose role is USER. ADMIN / SUPER_ADMIN accounts
+// (internal testing) are excluded from every customer number and
+// reported separately under `internal`.
+// Note: only DOCX exports are recorded server-side today; PDF export is
+// generated in the browser and is not tracked.
+// ─────────────────────────────────────────
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const SEGMENT_LIMIT = 150;
+
+function dayKey(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+function median(nums: number[]): number | null {
+  if (!nums.length) return null;
+  const a = [...nums].sort((x, y) => x - y);
+  const m = Math.floor(a.length / 2);
+  return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+}
+
+router.get(
+  '/engagement',
+  asyncHandler(async (_req: Request, res: Response) => {
+    const now = new Date();
+    const d30 = new Date(now.getTime() - 30 * DAY_MS);
+    const d7 = new Date(now.getTime() - 7 * DAY_MS);
+    const customerWhere = { role: 'USER' as const };
+    const internalWhere = { role: { in: ['ADMIN' as const, 'SUPER_ADMIN' as const] } };
+
+    const [
+      customers,
+      paperAgg,
+      exportRows,
+      ocrAgg,
+      paidAgg,
+      recentUsage,
+      internalUsers,
+      internalPapers,
+      internalExports,
+    ] = await Promise.all([
+      prisma.user.findMany({
+        where: customerWhere,
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          createdAt: true,
+          lastLoginAt: true,
+          emailVerified: true,
+          isActive: true,
+          subscription: { select: { status: true, plan: { select: { type: true } } } },
+        },
+      }),
+      prisma.paper.groupBy({
+        by: ['userId'],
+        where: { user: customerWhere },
+        _count: { _all: true },
+        _min: { createdAt: true },
+        _max: { createdAt: true },
+      }),
+      prisma.export.findMany({
+        where: { user: customerWhere },
+        select: { userId: true, createdAt: true },
+      }),
+      prisma.ocrJob.groupBy({
+        by: ['userId'],
+        where: { user: customerWhere },
+        _count: { _all: true },
+      }),
+      prisma.payment.groupBy({
+        by: ['userId'],
+        where: { status: 'success', user: customerWhere },
+        _sum: { amount: true },
+        _count: { _all: true },
+      }),
+      prisma.usageLog.findMany({
+        where: { createdAt: { gte: d30 }, user: customerWhere },
+        select: { userId: true, createdAt: true },
+      }),
+      prisma.user.count({ where: internalWhere }),
+      prisma.paper.count({ where: { user: internalWhere } }),
+      prisma.export.count({ where: { user: internalWhere } }),
+    ]);
+
+    // ── per-user facts ──
+    const papers = new Map(paperAgg.map(p => [p.userId, p]));
+    const ocr = new Map(ocrAgg.map(o => [o.userId, o._count._all]));
+    const paid = new Map(paidAgg.map(p => [p.userId, p]));
+    const exportsBy = new Map<string, Date[]>();
+    for (const e of exportRows) {
+      const list = exportsBy.get(e.userId) || [];
+      list.push(e.createdAt);
+      exportsBy.set(e.userId, list);
+    }
+    const activeIds30 = new Set<string>(recentUsage.map(u => u.userId));
+    const activeIds7 = new Set<string>(recentUsage.filter(u => u.createdAt >= d7).map(u => u.userId));
+    // Also count paper creation / export rows in the window (older rows may lack a usage log)
+    for (const p of paperAgg) if (p._max.createdAt && p._max.createdAt >= d30) activeIds30.add(p.userId);
+    for (const p of paperAgg) if (p._max.createdAt && p._max.createdAt >= d7) activeIds7.add(p.userId);
+    for (const [uid, list] of exportsBy) {
+      if (list.some(d => d >= d30)) activeIds30.add(uid);
+      if (list.some(d => d >= d7)) activeIds7.add(uid);
+    }
+
+    type Row = {
+      id: string;
+      email: string;
+      name: string | null;
+      signedUpAt: Date;
+      daysSinceSignup: number;
+      lastLoginAt: Date | null;
+      emailVerified: boolean;
+      papers: number;
+      exports: number;
+      exportDays: number;
+      ocrJobs: number;
+      lastActionAt: Date | null;
+      plan: string;
+      paidInr: number;
+    };
+
+    const rows: Row[] = customers.map(u => {
+      const p = papers.get(u.id);
+      const ex = exportsBy.get(u.id) || [];
+      const exportDays = new Set(ex.map(dayKey)).size;
+      const lastExport = ex.length ? new Date(Math.max(...ex.map(d => d.getTime()))) : null;
+      const lastPaper = p?._max.createdAt || null;
+      const lastActionAt =
+        lastExport && lastPaper ? (lastExport > lastPaper ? lastExport : lastPaper) : lastExport || lastPaper;
+      const pay = paid.get(u.id);
+      return {
+        id: u.id,
+        email: u.email,
+        name: u.name,
+        signedUpAt: u.createdAt,
+        daysSinceSignup: Math.floor((now.getTime() - u.createdAt.getTime()) / DAY_MS),
+        lastLoginAt: u.lastLoginAt,
+        emailVerified: u.emailVerified,
+        papers: p?._count._all || 0,
+        exports: ex.length,
+        exportDays,
+        ocrJobs: ocr.get(u.id) || 0,
+        lastActionAt,
+        plan: u.subscription?.plan.type || 'FREE',
+        paidInr: Math.round((pay?._sum.amount || 0) / 100),
+      };
+    });
+
+    const paidIds = new Set(paidAgg.map(p => p.userId));
+    const registered = rows.length;
+    const createdPaper = rows.filter(r => r.papers > 0);
+    const exported = rows.filter(r => r.exports > 0);
+    const repeat = rows.filter(r => r.exportDays >= 2);
+    const paidRows = rows.filter(r => paidIds.has(r.id));
+
+    const stage = (key: string, label: string, count: number, prev: number) => ({
+      key,
+      label,
+      count,
+      pctOfRegistered: registered ? Math.round((count / registered) * 1000) / 10 : 0,
+      pctOfPrevious: prev ? Math.round((count / prev) * 1000) / 10 : 0,
+      lost: Math.max(prev - count, 0),
+    });
+    const funnel = [
+      stage('registered', 'Registered', registered, registered),
+      stage('created', 'Created a paper', createdPaper.length, registered),
+      stage('exported', 'Exported a paper', exported.length, createdPaper.length),
+      stage('repeat', 'Came back and exported again', repeat.length, exported.length),
+      stage('paid', 'Paid', paidRows.length, repeat.length || exported.length),
+    ];
+
+    const seg = (list: Row[]) => ({ count: list.length, users: list.slice(0, SEGMENT_LIMIT) });
+    const segments = {
+      neverCreated: seg(rows.filter(r => r.papers === 0)),
+      createdNotExported: seg(rows.filter(r => r.papers > 0 && r.exports === 0)),
+      exportedOnce: seg(rows.filter(r => r.exportDays === 1)),
+      repeatNotPaid: seg(rows.filter(r => r.exportDays >= 2 && !paidIds.has(r.id))),
+    };
+
+    // ── genuine active users ──
+    const activeRows = rows.filter(r => activeIds30.has(r.id));
+    const active = {
+      last7Days: rows.filter(r => activeIds7.has(r.id)).length,
+      last30Days: activeRows.length,
+      loggedInLast30Days: rows.filter(r => r.lastLoginAt && r.lastLoginAt >= d30).length,
+      users: activeRows
+        .sort((a, b) => (b.lastActionAt?.getTime() || 0) - (a.lastActionAt?.getTime() || 0))
+        .slice(0, SEGMENT_LIMIT),
+    };
+
+    // ── weekly signup cohorts (last 8 weeks) ──
+    const weeks: { weekStart: string; signups: number; createdPaper: number; exported: number }[] = [];
+    const startOfWeek = (d: Date) => {
+      const x = new Date(d);
+      x.setUTCHours(0, 0, 0, 0);
+      x.setUTCDate(x.getUTCDate() - ((x.getUTCDay() + 6) % 7));
+      return x;
+    };
+    const thisWeek = startOfWeek(now);
+    for (let i = 7; i >= 0; i--) {
+      const from = new Date(thisWeek.getTime() - i * 7 * DAY_MS);
+      const to = new Date(from.getTime() + 7 * DAY_MS);
+      const cohort = rows.filter(r => r.signedUpAt >= from && r.signedUpAt < to);
+      weeks.push({
+        weekStart: dayKey(from),
+        signups: cohort.length,
+        createdPaper: cohort.filter(r => r.papers > 0).length,
+        exported: cohort.filter(r => r.exports > 0).length,
+      });
+    }
+
+    // ── signals that explain drop-off ──
+    const hoursToFirstPaper = createdPaper
+      .map(r => {
+        const first = papers.get(r.id)?._min.createdAt;
+        return first ? (first.getTime() - r.signedUpAt.getTime()) / 3600000 : null;
+      })
+      .filter((h): h is number => h !== null && h >= 0);
+    const neverCreated = segments.neverCreated;
+    const neverCreatedAll = rows.filter(r => r.papers === 0);
+
+    const signals = {
+      medianHoursToFirstPaper: median(hoursToFirstPaper),
+      neverCreatedUnverified: neverCreatedAll.filter(r => !r.emailVerified).length,
+      neverCreatedNeverLoggedBack: neverCreatedAll.filter(
+        r => !r.lastLoginAt || r.lastLoginAt.getTime() - r.signedUpAt.getTime() < 60 * 60 * 1000
+      ).length,
+      neverCreatedTriedUpload: neverCreatedAll.filter(r => r.ocrJobs > 0).length,
+      createdNotExportedAfter7Days: rows.filter(r => r.papers > 0 && r.exports === 0 && r.daysSinceSignup >= 7)
+        .length,
+      exportedOnceInactive14Days: rows.filter(
+        r => r.exportDays === 1 && r.lastActionAt && now.getTime() - r.lastActionAt.getTime() > 14 * DAY_MS
+      ).length,
+    };
+
+    const customerPapers = createdPaper.reduce((n, r) => n + r.papers, 0);
+    const customerExports = exported.reduce((n, r) => n + r.exports, 0);
+
+    res.json({
+      success: true,
+      data: {
+        generatedAt: now,
+        exportTrackingNote:
+          'Only DOCX exports are recorded on the server. PDF exports happen in the browser and are not counted.',
+        customers: {
+          registered,
+          papers: customerPapers,
+          exports: customerExports,
+          revenueInr: paidRows.reduce((n, r) => n + r.paidInr, 0),
+          paidPlanSubscribers: rows.filter(r => r.plan !== 'FREE').length,
+        },
+        internal: { users: internalUsers, papers: internalPapers, exports: internalExports },
+        funnel,
+        segments,
+        active,
+        weeklyCohorts: weeks,
+        signals,
+        neverCreatedTotal: neverCreated.count,
+      },
+    });
+  })
+);
+
 export default router;
