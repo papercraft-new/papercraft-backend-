@@ -3,7 +3,7 @@
 // Only submitted attempts are scored and ranked; running ones are listed separately.
 
 import { prisma } from '../utils/prisma';
-import { getExam, evaluate, type TestMeta } from './examService';
+import { getExam, scoreQuestions, sectionMaxMarks, type TestMeta } from './examService';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -65,7 +65,7 @@ export async function buildResults(test: TestMeta) {
   const sectionMeta = idx.sections.map((s, si) => ({
     title: s.title,
     questionCount: s.questions.filter(q => idx.byId.has(q.id)).length,
-    totalMarks: round2(s.questions.reduce((m, q) => m + (idx.byId.has(q.id) ? q.marks : 0), 0)),
+    totalMarks: sectionMaxMarks(s.questions.filter(q => idx.byId.has(q.id)).map(q => q.marks), idx.rules[si]?.attemptAny),
     _si: si,
   }));
 
@@ -93,14 +93,15 @@ export async function buildResults(test: TestMeta) {
     const sectionScores = idx.sections.map(() => 0);
     let correct = 0, wrong = 0, partial = 0, skipped = 0;
 
+    const scored = scoreQuestions(idx, neg, partialMarking, qid => chosen.get(qid)?.selected);
     idx.byId.forEach((e, qid) => {
       const r = chosen.get(qid);
       const st = qStats.get(qid)!;
       if (r && r.timeSpentSec > 0) { st.timeSum += r.timeSpentSec; st.timeN++; }
-      if (!r || !r.selected) { skipped++; st.skipped++; return; }
+      const ev = scored.get(qid)!;
+      if (!r || !r.selected || ev.ignored) { skipped++; st.skipped++; return; }
       // how many students picked each option (multiple-correct: every ticked option counts)
       if (e.kind !== 'NAT') r.selected.split(',').forEach(l => { if (l in st.options) st.options[l]++; });
-      const ev = evaluate(e, r.selected, neg, partialMarking);
       sectionScores[e.sectionIdx] += ev.marks;
       if (ev.verdict === 'right') { correct++; st.right++; }
       else if (ev.verdict === 'partial') { partial++; st.partial++; }

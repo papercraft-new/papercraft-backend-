@@ -24,7 +24,7 @@ interface SnapQuestion {
   options?: SnapOption[]; images?: any[]; tables?: any[];
   answer?: number; tolerance?: number; // NAT only
 }
-interface SnapSection { id: string; title: string; description?: string; questions: SnapQuestion[] }
+interface SnapSection { id: string; title: string; description?: string; negativeMarks?: number; attemptAny?: number; questions: SnapQuestion[] }
 interface Snapshot { examDetails?: Record<string, any>; sections: SnapSection[] }
 
 interface ViewOption { label: string; text: string; image?: any }
@@ -37,10 +37,13 @@ export interface IndexEntry {
   labels: Set<string>; view: BaseView;
 }
 
+export interface SectionRule { negativeMarks?: number; attemptAny?: number }
+
 export interface ExamIndex {
   examDetails: Record<string, any>;
   sections: SnapSection[];
   byId: Map<string, IndexEntry>;
+  rules: SectionRule[]; // per section, same order as `sections`; empty object = no special rule
 }
 
 export interface Order { sections: Array<{ id: string; qids: string[] }>; opts?: Record<string, string[]> }
@@ -151,7 +154,16 @@ function indexSnapshot(snap: Snapshot): ExamIndex {
     }
   });
 
-  return { examDetails: snap?.examDetails || {}, sections, byId };
+  const rules: SectionRule[] = sections.map(s => {
+    const r: SectionRule = {};
+    const n = Number(s.negativeMarks);
+    if (s.negativeMarks !== undefined && Number.isFinite(n) && n >= 0) r.negativeMarks = n;
+    const a = Number(s.attemptAny);
+    if (s.attemptAny !== undefined && Number.isInteger(a) && a >= 1) r.attemptAny = a;
+    return r;
+  });
+
+  return { examDetails: snap?.examDetails || {}, sections, byId, rules };
 }
 
 const examCache = new Map<string, ExamIndex>();
@@ -224,7 +236,15 @@ export function viewSections(idx: ExamIndex, order: Order | null | undefined, wi
         ...(withCorrect ? { correct: e.correct, ...(e.kind === 'NAT' ? { tolerance: e.tolerance } : {}) } : {}),
       };
     });
-    return { id: s.id, title: s.title, ...(s.description ? { description: s.description } : {}), questions };
+    const rule = idx.rules[idx.sections.indexOf(s)] || {};
+    return {
+      id: s.id,
+      title: s.title,
+      ...(s.description ? { description: s.description } : {}),
+      ...(rule.negativeMarks !== undefined ? { negativeMarks: rule.negativeMarks } : {}),
+      ...(rule.attemptAny ? { attemptAny: rule.attemptAny } : {}),
+      questions,
+    };
   });
 }
 
@@ -329,6 +349,43 @@ export function evaluate(
   return selected === e.correct ? { verdict: 'right', marks } : { verdict: 'wrong', marks: -negativeMarks };
 }
 
+/** The most a section can give: its marks, or the best N of them when only N questions may be answered. */
+export function sectionMaxMarks(marks: number[], attemptAny?: number): number {
+  const sorted = marks.slice().sort((a, b) => b - a);
+  const take = attemptAny && attemptAny < sorted.length ? sorted.slice(0, attemptAny) : sorted;
+  return round2(take.reduce((x, y) => x + y, 0));
+}
+
+/**
+ * Scores every question once, applying the section rules:
+ *  - a section's own negative marks replace the test's (numerical questions never lose marks);
+ *  - "attempt any N": only the first N answered questions of the section count, the rest are ignored.
+ * The one place that decides marks, used by the student result, the stored score and the teacher's results.
+ */
+export function scoreQuestions(
+  idx: ExamIndex,
+  testNegative: number,
+  partialMarking: boolean,
+  selectedOf: (qid: string) => string | null | undefined
+): Map<string, { verdict: Verdict; marks: number; ignored: boolean }> {
+  const out = new Map<string, { verdict: Verdict; marks: number; ignored: boolean }>();
+  const answeredIn = new Map<number, number>();
+  idx.byId.forEach((e, qid) => {
+    const sel = selectedOf(qid);
+    if (!sel) { out.set(qid, { verdict: 'skipped', marks: 0, ignored: false }); return; }
+    const rule = idx.rules[e.sectionIdx] || {};
+    if (rule.attemptAny) {
+      const n = (answeredIn.get(e.sectionIdx) || 0) + 1;
+      answeredIn.set(e.sectionIdx, n);
+      if (n > rule.attemptAny) { out.set(qid, { verdict: 'skipped', marks: 0, ignored: true }); return; }
+    }
+    const neg = rule.negativeMarks ?? testNegative;
+    const r = evaluate(e, sel, neg, partialMarking);
+    out.set(qid, { ...r, ignored: false });
+  });
+  return out;
+}
+
 export function gradeAnswers(
   idx: ExamIndex,
   negativeMarks: number,
@@ -336,9 +393,9 @@ export function gradeAnswers(
   partialMarking = false
 ) {
   const chosen = new Map(rows.map(r => [r.questionId, r.selected]));
+  const scored = scoreQuestions(idx, negativeMarks, partialMarking, qid => chosen.get(qid));
   let score = 0, correct = 0, wrong = 0, partial = 0, skipped = 0;
-  idx.byId.forEach((e, qid) => {
-    const r = evaluate(e, chosen.get(qid), negativeMarks, partialMarking);
+  scored.forEach(r => {
     score += r.marks;
     if (r.verdict === 'right') correct++;
     else if (r.verdict === 'wrong') wrong++;

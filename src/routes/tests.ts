@@ -14,7 +14,7 @@ import { prisma } from '../utils/prisma';
 import { authenticate } from '../middleware/authenticate';
 import { asyncHandler } from '../middleware/asyncHandler';
 import { logger } from '../utils/logger';
-import { TEST_META, resetAttempt, extendAttempt, extendAllRunning, expireIfDue, MAX_EXTEND_MIN } from '../services/examService';
+import { TEST_META, resetAttempt, extendAttempt, extendAllRunning, expireIfDue, sectionMaxMarks, MAX_EXTEND_MIN } from '../services/examService';
 import { buildResults, resultsCsv } from '../services/resultsService';
 
 const router = Router();
@@ -48,10 +48,14 @@ interface RawQuestion {
 }
 interface RawSection { id?: string; title?: string; description?: string; questions?: RawQuestion[] }
 
+export interface SectionRuleInput { sectionId: string; negativeMarks?: number; attemptAny?: number }
+
 export function buildSnapshot(
   paper: { examDetails: unknown; sections: unknown },
-  marksPerQuestion: number
+  marksPerQuestion: number,
+  rules: SectionRuleInput[] = []
 ) {
+  const ruleById = new Map(rules.map(r => [r.sectionId, r]));
   const sections: RawSection[] = Array.isArray(paper.sections) ? (paper.sections as RawSection[]) : [];
   const ed = (paper.examDetails && typeof paper.examDetails === 'object' ? paper.examDetails : {}) as Record<string, unknown>;
 
@@ -61,11 +65,13 @@ export function buildSnapshot(
   let counter = 1;
   let totalMarks = 0;
   let totalQuestions = 0;
+  const sectionsInfo: Array<{ id: string; title: string; count: number }> = [];
   const kinds = { scq: 0, msq: 0, nat: 0 };
 
   sections.forEach((s, si) => {
     const sectionTitle = (s.title || `Section ${si + 1}`).toString();
     const questions: Array<Record<string, unknown>> = [];
+    const secMarks: number[] = [];
 
     for (const q of Array.isArray(s.questions) ? s.questions : []) {
       totalQuestions++;
@@ -130,7 +136,7 @@ export function buildSnapshot(
       usedIds.add(id);
 
       const marks = Number(q.marks) > 0 ? Number(q.marks) : marksPerQuestion;
-      totalMarks += marks;
+      secMarks.push(marks);
 
       questions.push({
         id,
@@ -156,10 +162,18 @@ export function buildSnapshot(
     }
 
     if (questions.length > 0) {
+      const secId = s.id || `s_${si + 1}`;
+      const rule = ruleById.get(secId);
+      // "attempt any N" only means something when N is less than the number of questions
+      const attemptAny = rule?.attemptAny && rule.attemptAny >= 1 && rule.attemptAny < questions.length ? Math.floor(rule.attemptAny) : undefined;
+      totalMarks += sectionMaxMarks(secMarks, attemptAny);
+      sectionsInfo.push({ id: secId, title: sectionTitle, count: questions.length });
       outSections.push({
-        id: s.id || `s_${si + 1}`,
+        id: secId,
         title: sectionTitle,
         ...(s.description ? { description: s.description } : {}),
+        ...(rule?.negativeMarks !== undefined ? { negativeMarks: rule.negativeMarks } : {}),
+        ...(attemptAny ? { attemptAny } : {}),
         questions,
       });
     }
@@ -181,6 +195,7 @@ export function buildSnapshot(
     totalMarks,
     skipped,
     kinds,
+    sections: sectionsInfo,
   };
 }
 
@@ -251,10 +266,10 @@ router.post(
     const paper = await prisma.paper.findFirst({ where: { id: req.body.paperId, userId } });
     if (!paper) return res.status(404).json({ success: false, error: 'Paper not found' });
 
-    const { usable, totalQuestions, skipped, kinds } = buildSnapshot(paper, 1);
+    const { usable, totalQuestions, skipped, kinds, sections } = buildSnapshot(paper, 1);
     res.json({
       success: true,
-      data: { title: paper.title, usable, totalQuestions, kinds, skipped: skipped.slice(0, 50), skippedCount: skipped.length },
+      data: { title: paper.title, usable, totalQuestions, kinds, sections, skipped: skipped.slice(0, 50), skippedCount: skipped.length },
     });
   })
 );
@@ -282,6 +297,10 @@ router.post(
     body('showAnswers').optional().isBoolean(),
     body('onePerRoll').optional().isBoolean(),
     body('partialMarking').optional().isBoolean(),
+    body('sectionRules').optional({ nullable: true }).isArray({ max: 50 }).withMessage('Invalid section rules'),
+    body('sectionRules.*.sectionId').optional().isString().isLength({ min: 1, max: 100 }),
+    body('sectionRules.*.negativeMarks').optional({ nullable: true }).isFloat({ min: 0, max: 10 }).withMessage('Section negative marks must be 0 to 10'),
+    body('sectionRules.*.attemptAny').optional({ nullable: true }).isInt({ min: 1, max: 1000 }).withMessage('"Attempt any" must be a whole number, 1 or more'),
   ],
   asyncHandler(async (req: Request, res: Response) => {
     const errors = validationResult(req);
@@ -296,7 +315,14 @@ router.post(
     if (!paper) return res.status(404).json({ success: false, error: 'Paper not found' });
 
     const marksPerQuestion = b.marksPerQuestion !== undefined ? Number(b.marksPerQuestion) : 1;
-    const { snapshot, usable, totalMarks, skipped } = buildSnapshot(paper, marksPerQuestion);
+    const rules: SectionRuleInput[] = (Array.isArray(b.sectionRules) ? b.sectionRules : [])
+      .filter((r: any) => r && typeof r.sectionId === 'string')
+      .map((r: any) => ({
+        sectionId: r.sectionId,
+        ...(r.negativeMarks !== undefined && r.negativeMarks !== null && r.negativeMarks !== '' ? { negativeMarks: Number(r.negativeMarks) } : {}),
+        ...(r.attemptAny !== undefined && r.attemptAny !== null && r.attemptAny !== '' ? { attemptAny: Number(r.attemptAny) } : {}),
+      }));
+    const { snapshot, usable, totalMarks, skipped } = buildSnapshot(paper, marksPerQuestion, rules);
     if (usable === 0) {
       return res.status(400).json({
         success: false,
