@@ -238,6 +238,18 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
 
   const children: (Paragraph | Table)[] = [];
   const images = await loadDocxImages(sections);
+  // Institute logo (optional): fetched once, a failed download simply means no logo
+  const logo = templateKey === 'tpl_professional' && examDetails.logoUrl ? await fetchImageForDocx(examDetails.logoUrl).catch(() => null) : null;
+  /** The logo scaled to fit a box, never stretched. */
+  const logoRun = (maxW: number, maxH: number): ImageRun | null => {
+    if (!logo) return null;
+    const k = Math.min(maxW / logo.width, maxH / logo.height, 1);
+    return new ImageRun({
+      data: logo.data,
+      transformation: { width: Math.max(8, Math.round(logo.width * k)), height: Math.max(8, Math.round(logo.height * k)) },
+      altText: { name: 'Institute logo', description: 'Institute logo', title: '' },
+    });
+  };
 
   const isClassic = templateKey === 'tpl_classic';
   const isWorksheet = templateKey === 'tpl_worksheet';
@@ -394,18 +406,22 @@ export async function generateDocx(paper: PaperData, templateKey = 'school'): Pr
         top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE },
         left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE },
       },
-      children: [
-        new Paragraph({
-          alignment: AlignmentType.CENTER,
-          spacing: { before: 60, after: 10 },
-          children: [new TextRun({ text: '◯', size: 96, font: 'Arial', color: 'BBBBBB' })],
-        }),
-        new Paragraph({
-          alignment: AlignmentType.CENTER,
-          spacing: { before: 0, after: 0 },
-          children: [new TextRun({ text: 'LOGO', size: 16, font, color: 'AAAAAA' })],
-        }),
-      ],
+      children: (() => {
+        const run = logoRun(90, 90);
+        if (run) return [new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 60, after: 10 }, children: [run] })];
+        return [
+          new Paragraph({
+            alignment: AlignmentType.CENTER,
+            spacing: { before: 60, after: 10 },
+            children: [new TextRun({ text: '◯', size: 96, font: 'Arial', color: 'BBBBBB' })],
+          }),
+          new Paragraph({
+            alignment: AlignmentType.CENTER,
+            spacing: { before: 0, after: 0 },
+            children: [new TextRun({ text: 'LOGO', size: 16, font, color: 'AAAAAA' })],
+          }),
+        ];
+      })(),
     });
 
     // Info box: institution name in shaded top row, then detail lines below

@@ -78,6 +78,7 @@ export interface RenderSection {
 export interface RenderExamDetails {
   institutionName?: string;
   institutionAddress?: string;
+  logoUrl?: string;
   subject?: string;
   class?: string;
   examType?: string;
@@ -366,6 +367,14 @@ function safeImageSrc(url: unknown): string {
   const u = url.trim();
   const ok = /^https?:\/\//i.test(u) || /^data:image\/(png|jpe?g|gif|webp);base64,[a-z0-9+/=]+$/i.test(u);
   return ok ? escAttr(u) : '';
+}
+
+/** The institute logo for a paper header, or '' when none is set. Never stretched, never taller than maxH px. */
+function logoHtml(ed: { logoUrl?: string }, maxH: number, maxW: number): string {
+  const src = safeImageSrc(ed.logoUrl);
+  return src
+    ? `<img src="${src}" alt="Logo" style="display:block;margin:0 auto;max-height:${maxH}px;max-width:${maxW}px;width:auto;height:auto;object-fit:contain">`
+    : '';
 }
 
 /**
@@ -728,7 +737,7 @@ export function buildPaperBody(paper: RenderPaper, templateKey: string): string 
     ]
       .filter(Boolean)
       .join('');
-    return `<div class="paper-wrap"><div class="pro-header"><div class="pro-logo"><div class="pro-logo-inner">LOGO</div></div><div class="pro-info"><div class="pro-info-name">${(ed.institutionName || 'INSTITUTION NAME').toUpperCase()}</div><div class="pro-info-divider"></div>${infoLines}</div></div><div class="pro-meta-row"><span><strong>Subject:</strong> ${ed.subject || '—'}</span><span><strong>Class:</strong> ${ed.class || '—'}</span><span><strong>Date:</strong> ${dateStr}</span><span><strong>Duration:</strong> ${ed.duration || '3 Hrs'}</span><span><strong>Max. Marks:</strong> ${totalMarks || ed.totalMarks || '—'}</span></div><div class="thin-div"></div><div class="paper-title">${ed.examType || 'Question Paper'}</div><div class="thin-div"></div>${sectionsHTML}<div class="thin-div"></div><div class="sig-block"><div class="sig-line"><div>Subject Teacher</div></div><div class="sig-line"><div>HOD / Principal</div></div><div class="sig-line"><div>Exam Controller</div></div></div></div>`;
+    return `<div class="paper-wrap"><div class="pro-header">${logoHtml(ed, 80, 80) ? `<div class="pro-logo" style="border:none;border-radius:0">${logoHtml(ed, 80, 80)}</div>` : '<div class="pro-logo"><div class="pro-logo-inner">LOGO</div></div>'}<div class="pro-info"><div class="pro-info-name">${(ed.institutionName || 'INSTITUTION NAME').toUpperCase()}</div><div class="pro-info-divider"></div>${infoLines}</div></div><div class="pro-meta-row"><span><strong>Subject:</strong> ${ed.subject || '—'}</span><span><strong>Class:</strong> ${ed.class || '—'}</span><span><strong>Date:</strong> ${dateStr}</span><span><strong>Duration:</strong> ${ed.duration || '3 Hrs'}</span><span><strong>Max. Marks:</strong> ${totalMarks || ed.totalMarks || '—'}</span></div><div class="thin-div"></div><div class="paper-title">${ed.examType || 'Question Paper'}</div><div class="thin-div"></div>${sectionsHTML}<div class="thin-div"></div><div class="sig-block"><div class="sig-line"><div>Subject Teacher</div></div><div class="sig-line"><div>HOD / Principal</div></div><div class="sig-line"><div>Exam Controller</div></div></div></div>`;
   }
   // Default template
   return `<div class="paper-wrap"><div class="header"><div class="inst-name">${ed.institutionName || 'Institution Name'}</div>${ed.institutionAddress ? `<div class="inst-addr">${ed.institutionAddress}</div>` : ''}</div><div class="thick-div"></div><table class="meta-table"><tr><td><strong>Subject:</strong> ${ed.subject || '—'}</td><td style="text-align:right"><strong>Date:</strong> ${dateStr}</td></tr><tr><td><strong>Class:</strong> ${ed.class || '—'}</td><td style="text-align:right"><strong>Duration:</strong> ${ed.duration || '3 Hours'}</td></tr><tr><td><strong>Max. Marks:</strong> ${totalMarks || ed.totalMarks || '—'}</td><td style="text-align:right"></td></tr></table><div class="thin-div"></div><div class="paper-title">${ed.examType || 'Question Paper'}</div>${instructionsHTML}${sectionsHTML}<div class="thick-div"></div></div>`;
